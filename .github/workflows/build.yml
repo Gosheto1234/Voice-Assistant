@@ -44,10 +44,7 @@ jobs:
           pip install -r requirements.txt pyinstaller
 
       - name: Build executable
-        run: |
-          pyinstaller --onefile --windowed --icon=icon.ico \
-            --name VoiceAssistant.exe \
-            voice_assistant_new_ui.py
+        run: pyinstaller --onefile --windowed --icon=icon.ico --name VoiceAssistant.exe voice_assistant_new_ui.py
 
       - name: Create GitHub Release
         id: create_release
