@@ -1,0 +1,9 @@
+{
+  "Dark": {
+  "bg": "#000000",
+  "fg": "#FFFFFF",
+  "button_bg": "#333333",
+  "button_fg": "#FFFFFF",
+  "module": "themes.darkmode"
+  }
+}

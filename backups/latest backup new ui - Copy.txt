@@ -1,0 +1,604 @@
+import os
+import sys
+import json
+import glob
+import threading
+import subprocess
+import logging
+from logging.handlers import RotatingFileHandler
+import random
+import time
+
+import tkinter as tk
+from tkinter import ttk, scrolledtext, Toplevel, PanedWindow
+
+import speech_recognition as sr
+import pyautogui
+import psutil
+import pygetwindow as gw
+from PIL import Image, ImageTk, ImageSequence
+
+# ——— Configuration & Globals ———
+LOG_PATH = os.path.join(os.path.dirname(__file__), "assistant.log")
+APPS_DB_PATH = os.path.join(os.path.dirname(__file__), "apps.json")
+SELECTED_MIC_PATH = os.path.join(os.path.dirname(__file__), "selected_mic.json")
+THEMES_PATH = os.path.join(os.path.dirname(__file__), "themes.json")
+SELECTED_THEME_PATH = os.path.join(os.path.dirname(__file__), "selected_theme.json")
+
+
+recognizer = sr.Recognizer()
+microphones = []
+selected_mic = None
+log_widget = None
+keep_listening = False
+apps_db = {}
+main_root = None
+status_label = None
+
+# Only Status/Feedback panel
+feedback_frame = None
+
+# ——— Logging Setup ———
+logger = logging.getLogger("VA")
+logger.setLevel(logging.DEBUG)
+file_handler = RotatingFileHandler(LOG_PATH, maxBytes=1_000_000, backupCount=3, encoding="utf-8")
+formatter = logging.Formatter("%(asctime)s | %(levelname)s | %(message)s")
+file_handler.setFormatter(formatter)
+logger.addHandler(file_handler)
+console_handler = logging.StreamHandler(stream=sys.stdout)
+console_handler.setFormatter(formatter)
+logger.addHandler(console_handler)
+
+def handle_exc(t, v, tb):
+    if issubclass(t, KeyboardInterrupt):
+        return
+    logger.error("Uncaught Exception", exc_info=(t, v, tb))
+sys.excepthook = handle_exc
+
+# ——— Persistence Helpers ———
+def load_json(path, default=None):
+    if os.path.exists(path):
+        with open(path, "r") as f:
+            return json.load(f)
+    return default
+
+def save_json(path, data):
+    with open(path, "w") as f:
+        json.dump(data, f, indent=2)
+
+def load_selected_theme():
+    data = load_json(SELECTED_THEME_PATH, default={}) or {}
+    return data.get("theme", "Dark")    # fallback to Dark
+
+def save_selected_theme(theme_name):
+    save_json(SELECTED_THEME_PATH, {"theme": theme_name})
+
+# ——— Theme Management ———
+def load_themes():
+    """Load themes.json (create it with defaults if missing)."""
+    if not os.path.exists(THEMES_PATH):
+        default = {
+            "sakura": {
+                "bg": "#ffeef2",
+                "fg": "#5c2a2a",
+                "button_bg": "#f7cad0",
+                "button_fg": "#5c2a2a"
+            },
+            "Dark": {
+                "bg": "#000000",      # true black background
+                "fg": "#ffffff",      # white text
+                "button_bg": "#333333",
+                "button_fg": "#ffffff",
+                "module": "themes.darkmode"
+            }
+        }
+        save_json(THEMES_PATH, default)
+        return default
+    return load_json(THEMES_PATH, {}) or {}
+
+def apply_theme(root, theme):
+    try:
+        # accept both sets of key names
+        bg          = theme.get("bg",          theme.get("background",   "#ffffff"))
+        fg          = theme.get("fg",          theme.get("foreground",   "#000000"))
+        button_bg   = theme.get("button_bg",   theme.get("bg",           bg))
+        button_fg   = theme.get("button_fg",   theme.get("fg",           fg))
+
+        root.configure(bg=bg)
+
+        def recurse(w):
+            cls = w.__class__.__name__
+            if cls in ("Frame", "LabelFrame", "PanedWindow", "Toplevel"):
+                w.configure(bg=bg)
+            elif cls == "Label":
+                w.configure(bg=bg, fg=fg)
+            elif cls == "Button":
+                w.configure(bg=button_bg, fg=button_fg)
+            elif cls in ("Text", "ScrolledText"):
+                w.configure(bg=bg, fg=fg, insertbackground=fg)
+            elif cls == "Combobox":
+                w.configure(background=bg, foreground=fg)
+            for c in w.winfo_children():
+                recurse(c)
+
+        recurse(root)
+        ui_log(f"Applied theme BG={bg} FG={fg}", "info")
+
+    except Exception as e:
+        ui_log(f"Theme apply failed: {e}", "error")
+
+
+# ——— Apps DB ———
+def load_apps_db():
+    global apps_db
+    apps_db = load_json(APPS_DB_PATH, default={}) or {}
+    ui_log(f"Loaded {len(apps_db)} apps", "info")
+
+def save_apps_db():
+    save_json(APPS_DB_PATH, apps_db)
+
+def learn_apps():
+    found = {}
+    for rd in (os.environ.get("ProgramFiles",""), os.environ.get("ProgramFiles(x86)","")):
+        for exe in glob.glob(os.path.join(rd, "**", "*.exe"), recursive=True):
+            name = os.path.splitext(os.path.basename(exe))[0].lower()
+            found[name] = exe
+    sm = os.path.join(os.environ.get("APPDATA",""), r"Microsoft\Windows\Start Menu\Programs")
+    for lnk in glob.glob(os.path.join(sm, "**", "*.lnk"), recursive=True):
+        name = os.path.splitext(os.path.basename(lnk))[0].lower()
+        found[name] = lnk
+    apps_db.clear()
+    apps_db.update(found)
+    save_apps_db()
+    ui_log(f"Learned {len(apps_db)} apps", "info")
+
+# ——— Mic Management ———
+def load_selected_mic():
+    global selected_mic
+    data = load_json(SELECTED_MIC_PATH, default={}) or {}
+    idx = data.get("selected_mic", 0)
+    if idx < 0 or idx >= len(microphones):
+        idx = 0  # fallback
+        ui_log("Mic index out of range, reset to 0", "warning")
+    selected_mic.set(idx)
+    ui_log("Loaded selected mic", "info")
+
+def save_selected_mic():
+    save_json(SELECTED_MIC_PATH, {"selected_mic": selected_mic.get()})
+    ui_log("Saved selected mic", "info")
+
+# ——— Media ———
+def send_media(key):
+    try:
+        pyautogui.press(key)
+        ui_log(f"Media:{key}", "info")
+    except Exception as e:
+        ui_log(f"Media failed:{e}", "error")
+
+# ——— Window ———
+def focus_app_window(name):
+    try:
+        wins = gw.getAllTitles()
+        ui_log(f"Window Titles: {wins}", "debug")  # Debugging line
+        for title in wins:
+            if name.lower() in title.lower():
+                win = gw.getWindowsWithTitle(title)[0]
+                win.activate()
+                win.restore()
+                win.maximize()
+                return True
+    except Exception as e:
+        ui_log(f"Focus error: {e}", "error")
+    return False
+
+# ——— Command Handlers ———
+def is_process_running(name):
+    """Check if a process with the given name is already running."""
+    for proc in psutil.process_iter(['pid', 'name']):
+        try:
+            if name.lower() in proc.info['name'].lower():
+                return True
+        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+            continue
+    return False
+
+# 2. Handle opening the application with threading
+def handle_open(args):
+    def open_thread():
+        name = " ".join(args)  # Combine arguments into a single app name
+        path = apps_db.get(name)  # Get app path from the database
+        
+        if not path:
+            ui_log(f"Unknown app: {name}", "warning")
+            return
+        
+        if is_process_running(name):  # Check if the app is already running
+            ui_log(f"{name} running; focusing", "info")
+            focus_app_window(name)  # Focus the window if the app is running
+        else:
+            try:
+                if path.lower().endswith('.lnk'):
+                    os.startfile(path)  # Open the app if it's a shortcut
+                else:
+                    subprocess.Popen(path, shell=True)  # Open the app directly
+                ui_log(f"Opened {name}", "info")
+            except Exception as e:
+                ui_log(f"Open failed: {e}", "error")
+
+    # Create and start the thread for opening the app
+    threading.Thread(target=open_thread, daemon=True).start()
+
+# 3. Handle switching between apps (no threading needed here, since it's just focusing)
+def handle_switch(args):
+    if not args:
+        ui_log("No app specified to switch to", "warning")
+        return
+    nm = " ".join(args)
+    if not focus_app_window(nm):
+        ui_log(f"Can't switch to {nm}", "warning")
+    else:
+        ui_log(f"Switched to {nm}", "info")
+
+
+
+# 4. Handle closing the application with threading
+def handle_close(args):
+    def close_thread():
+        nm = " ".join(args)
+        exe = nm + ".exe"
+        try:
+            subprocess.call(["taskkill", "/f", "/im", exe], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            ui_log(f"Closed {nm}", "info")
+        except Exception as e:
+            ui_log(f"Close failed: {e}", "error")
+    
+    # Create and start the thread for closing the app
+    threading.Thread(target=close_thread, daemon=True).start()
+
+    
+
+# ——— Core Execution ———
+def execute_command(text):
+    show_feedback(f"Processing: {text}")
+    cmd = text.lower().split()
+    
+    if not cmd: return
+
+    # Command to relearn apps
+    if cmd[0] in ("learn", "learn apps"):
+        learn_apps()
+        show_feedback("Apps relearned")
+        return
+
+    # Open application command
+    if cmd[0] == "open":
+        handle_open(cmd[1:])
+        show_feedback(f"Opened {cmd[1]}")
+        return
+
+    # Switch application command
+    if cmd[0] == "switch":
+        handle_switch(cmd[1:])
+        show_feedback(f"Switched")
+        return
+
+    # Close application command
+    if cmd[0] == "close":
+        handle_close(cmd[1:])
+        show_feedback(f"Closed {cmd[1]}")
+        return
+
+    # Media control variations
+media_map = {
+    "play": ["play", "start", "begin", "resume", "unpause", "continue"],
+    "pause": ["pause", "stop", "halt", "hold", "pause music", "stop music"],
+    "next": ["next", "skip", "next track", "next song", "forward", "skip song", "skip next"],
+    "previous": ["previous", "back", "prev", "previous track", "previous song", "rewind"],
+    "volume up": ["volume up", "turn up the volume", "raise volume", "increase volume", "louder", "up the volume"],
+    "volume down": ["volume down", "turn down the volume", "lower volume", "decrease volume", "quieter", "down the volume"]
+}
+
+# Helper function to check if Spotify (or another player) is running
+def is_media_player_running():
+    for proc in psutil.process_iter(['pid', 'name']):
+        if "spotify" in proc.info['name'].lower() or "vlc" in proc.info['name'].lower():
+            return True
+    return False
+
+# Function to control the media player (for example, Spotify or VLC)
+def send_media_action(key):
+    try:
+        pyautogui.press(key)  # Send a key press (space, next track, etc.)
+        ui_log(f"Sent media action: {key}", "info")
+    except Exception as e:
+        ui_log(f"Media control failed: {e}", "error")
+
+# Updated command handler with better media control
+def execute_command(text):
+    show_feedback(f"Processing: {text}")
+    cmd = text.lower().split()
+
+    if not cmd: return
+
+    # Command to relearn apps
+    if cmd[0] in ("learn", "learn apps"):
+        learn_apps()
+        show_feedback("Apps relearned")
+        return
+
+    # Open application command
+    if cmd[0] == "open":
+        handle_open(cmd[1:])
+        show_feedback(f"Opened {cmd[1]}")
+        return
+
+    # Switch application command
+    if cmd[0] == "switch":
+        handle_switch(cmd[1:])
+        show_feedback(f"Switched")
+        return
+
+    # Close application command
+    if cmd[0] == "close":
+        handle_close(cmd[1:])
+        show_feedback(f"Closed {cmd[1]}")
+        return
+
+    # Media control actions
+    for action, variations in media_map.items():
+        if any(phrase in text.lower() for phrase in variations):
+            if action == "play":
+                if not is_media_player_running():
+                    ui_log("Media player not running, launching Spotify or VLC", "info")
+                    subprocess.Popen(["spotify"])  # Launch Spotify or VLC, or your desired media player
+                    time.sleep(3)  # Give it time to open
+                send_media_action("playpause")  # Simulate a spacebar press for play/pause
+            elif action == "pause":
+                send_media_action("playpause")  # Play/pause toggle
+            elif action == "next":
+                send_media_action("nexttrack")  # Next track in most media players
+            elif action == "previous":
+                send_media_action("prevtrack")  # Previous track
+            elif action == "volume up":
+                send_media_action("volumeup")  # Increase volume
+            elif action == "volume down":
+                send_media_action("volumedown")  # Decrease volume
+            show_feedback(f"Media: {action}")
+            return
+
+    # Handle "Good morning" or similar wake-up commands
+    if text.lower().startswith("good morning"):
+        wake_up()  # assume defined
+        show_feedback("Good morning!")
+        return
+
+    # Log for unrecognized commands
+    ui_log(f"No action for: {text}", "warning")
+    show_feedback("No action")
+
+
+# ——— Listening ———
+def listen_once():
+    idx=selected_mic.get()
+    ui_log(f"Mic idx {idx}","debug")
+    if idx < 0 or idx >= len(microphones):
+        ui_log("Invalid mic index", "error")
+        return
+    try:
+        with sr.Microphone(device_index=idx) as src:
+            recognizer.adjust_for_ambient_noise(src, 0.5)
+            ui_log("Listening…","debug")
+            audio = recognizer.listen(src, timeout=2, phrase_time_limit=10)
+    except Exception as e:
+        ui_log(f"Mic error:{e}","error")
+        return
+    try:
+        txt = recognizer.recognize_google(audio)
+        ui_log(f"Heard: {txt}", "info")
+        execute_command(txt)
+    except sr.UnknownValueError:
+        ui_log("No understand", "warning")
+        show_feedback("…")
+    except sr.RequestError as e:
+        ui_log(f"Rec error:{e}", "error")
+        show_feedback("Error")
+
+def listen_loop():
+    global keep_listening
+    while keep_listening:
+        listen_once()
+
+def start_listening():
+    global keep_listening, is_processing
+    is_processing = True
+    keep_listening = True  # Enable continuous listening
+    update_status("Listening...")
+
+    # Run listen_loop in a separate thread so it doesn't block the UI
+    threading.Thread(target=listen_loop, daemon=True).start()
+
+def stop_listening():
+    global keep_listening, is_processing
+    keep_listening = False  # Stop the listening loop
+    is_processing = False
+    update_status("Idle")
+    ui_log("Listening stopped.", "info")
+# ——— UI ———
+def ui_log(msg, level="info"):
+    getattr(logger, level)(msg)
+    if log_widget:
+        log_widget.insert(tk.END, msg+"\n")
+        log_widget.see(tk.END)
+
+def show_feedback(msg):
+    if feedback_frame is None:
+        print(f"Feedback skipped (UI not ready): {msg}")
+        return
+
+    for w in feedback_frame.winfo_children():
+        w.destroy()
+    tk.Label(feedback_frame, text=msg, anchor="w").pack(fill=tk.X)
+
+def update_status(message):
+    if status_label:
+        status_label.config(text=message)
+        status_label.update_idletasks()
+
+def open_mic_selection():
+    global main_root
+    win=Toplevel(main_root)
+    win.title("Settings")
+    win.geometry("300x200")
+
+    tk.Label(win, text="Microphone").pack(pady=5)
+    combo=ttk.Combobox(win, values=microphones, state="readonly", width=30)
+    combo.current(selected_mic.get())
+    combo.pack(pady=5)
+    combo.bind("<<ComboboxSelected>>", lambda e: selected_mic.set(combo.current()))
+
+    themes=load_themes()
+    names=list(themes.keys())
+    current_theme = tk.StringVar(value=names[0])
+    tk.Label(win, text="Theme").pack(pady=5)
+    tcombo = ttk.Combobox(win, values=names, state="readonly", width=30, textvariable=current_theme)
+    tcombo.pack(pady=5)
+
+    def apply_changes():
+        save_selected_mic()
+        sel = current_theme.get()
+        theme = themes[sel]
+        apply_theme(main_root, theme)
+        save_selected_theme(sel)
+        # persist the selection
+        save_selected_theme(sel)
+        modname = theme.get("module")
+        if modname:
+            try:
+               import importlib
+               m = importlib.import_module(modname)
+               if hasattr(m, "apply_animation"):
+                   m.apply_animation(main_root)
+                   ui_log(f"Anim from {modname}", "info")
+            except Exception as e:
+                ui_log(f"Anim load fail:{e}", "error")
+        win.destroy()
+
+
+       
+
+    tk.Button(win, text="Apply", command=apply_changes).pack(pady=10)
+
+
+def build_ui():
+    global main_root, microphones, selected_mic
+
+    class AnimatedDog:
+        def __init__(self, canvas, gif_path, bowl_x, bowl_y, bowl_radius, food_text):
+            self.canvas = canvas
+            self.bowl_x = bowl_x
+            self.bowl_y = bowl_y
+            self.bowl_radius = bowl_radius
+            self.food_text = food_text
+            self.frames = [ImageTk.PhotoImage(frame.resize((48, 48), Image.Resampling.LANCZOS))
+                           for frame in ImageSequence.Iterator(Image.open(gif_path))]
+            self.sprite = canvas.create_image(10, 10, image=self.frames[0], anchor="nw")
+            self.i = 0
+            self.animate()
+            self.move()
+
+        def animate(self):
+            if not is_processing:
+                self.canvas.itemconfig(self.sprite, image=self.frames[self.i])
+                self.i = (self.i + 1) % len(self.frames)
+            main_root.after(100, self.animate)
+
+        def move(self):
+            if is_processing:
+                main_root.after(100, self.move)
+                return
+            w, h = self.canvas.winfo_width(), self.canvas.winfo_height()
+            tx = random.randint(0, max(0, w - 48))
+            ty = random.randint(0, max(0, h - 48))
+            cx, cy = self.canvas.coords(self.sprite)
+            dx, dy = tx - cx, ty - cy
+            dist = (dx ** 2 + dy ** 2) ** 0.5
+            if abs(cx - self.bowl_x) < self.bowl_radius and abs(cy - self.bowl_y) < self.bowl_radius:
+                self.show_food_text()
+            if dist > 2:
+                self.canvas.coords(self.sprite, cx + dx / dist * 2, cy + dy / dist * 2)
+                main_root.after(10, self.move)
+            else:
+                main_root.after(500, self.move)
+
+        def show_food_text(self):
+            self.food_text.place(x=self.bowl_x, y=self.bowl_y - 30)
+            self.food_text.after(1000, lambda: self.food_text.place(x=-100, y=-100))
+
+    # Start UI
+    main_root = tk.Tk()
+    root = main_root
+    root.title("Voice Assistant")
+    root.geometry("400x300")
+    root.resizable(True, True)
+
+    is_processing = False  # Flag to pause dog animation when processing
+
+    # Theme + mic/app setup
+    themes = load_themes()
+    chosen_name = load_selected_theme()
+    chosen_theme = themes.get(chosen_name, themes["Dark"])
+    selected_mic = tk.IntVar(value=0)
+    microphones = sr.Microphone.list_microphone_names()
+    load_selected_mic()
+    load_apps_db()
+
+    # Animation canvas
+    animation_canvas = tk.Canvas(root, bg="black", highlightthickness=0)
+    animation_canvas.pack(fill=tk.BOTH, expand=True)
+
+    # Bowl
+    bowl_x = random.randint(150, 350)
+    bowl_y = random.randint(150, 250)
+    bowl_radius = 20
+    animation_canvas.create_oval(bowl_x - bowl_radius, bowl_y - bowl_radius,
+                                 bowl_x + bowl_radius, bowl_y + bowl_radius, fill="brown")
+
+    # Status label
+    global status_label
+    status_label = tk.Label(root, text="Idle", font=("Helvetica", 12), bg="black", fg="white")
+    status_label.place(relx=0.01, rely=0.01, anchor="nw")
+
+    
+
+    # Food label
+    food_text = tk.Label(root, text="Food!", font=("Helvetica", 24, "bold"), fg="green", bg="black")
+    food_text.place(x=-100, y=-100)
+
+    # Control buttons
+    button_frame = tk.Frame(root, bg=chosen_theme.get("bg", "#000"))
+    button_frame.pack(side=tk.BOTTOM, fill=tk.X, pady=5)
+
+    tk.Button(button_frame, text="Start", command=start_listening, width=10).pack(side=tk.LEFT, padx=5)
+    tk.Button(button_frame, text="Stop", command=stop_listening, width=10).pack(side=tk.LEFT, padx=5)
+    tk.Button(button_frame, text="Relearn", command=learn_apps, width=10).pack(side=tk.LEFT, padx=5)
+
+    # Gear settings
+    gear = tk.Button(root, text="⚙️", command=open_mic_selection, width=4)
+    gear.place(relx=1.0, x=-10, y=10, anchor="ne")
+
+    # Load dog gif & animation
+    gif_path = os.path.join(os.path.dirname(__file__), "annoying_dog.gif")
+    dog = AnimatedDog(animation_canvas, gif_path, bowl_x, bowl_y, bowl_radius, food_text)
+
+    # Apply current theme
+    apply_theme(root, chosen_theme)
+
+    ui_log("Ready.", "info")
+    update_status("Ready")
+    return root
+
+
+if __name__ == "__main__":
+    app = build_ui()
+    if app:
+        app.mainloop()

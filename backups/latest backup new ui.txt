@@ -1,0 +1,398 @@
+import os
+import sys
+import json
+import glob
+import threading
+import subprocess
+import logging
+from logging.handlers import RotatingFileHandler
+
+import tkinter as tk
+from tkinter import ttk, scrolledtext, Toplevel, PanedWindow
+
+import speech_recognition as sr
+import pyautogui
+import psutil
+import pygetwindow as gw
+
+# ——— Configuration & Globals ———
+LOG_PATH = os.path.join(os.path.dirname(__file__), "assistant.log")
+APPS_DB_PATH = os.path.join(os.path.dirname(__file__), "apps.json")
+SELECTED_MIC_PATH = os.path.join(os.path.dirname(__file__), "selected_mic.json")
+THEMES_PATH = os.path.join(os.path.dirname(__file__), "themes.json")
+SELECTED_THEME_PATH = os.path.join(os.path.dirname(__file__), "selected_theme.json")
+
+
+recognizer = sr.Recognizer()
+microphones = []
+selected_mic = None
+log_widget = None
+keep_listening = False
+apps_db = {}
+main_root = None
+
+# Only Status/Feedback panel
+feedback_frame = None
+
+# ——— Logging Setup ———
+logger = logging.getLogger("VA")
+logger.setLevel(logging.DEBUG)
+file_handler = RotatingFileHandler(LOG_PATH, maxBytes=1_000_000, backupCount=3, encoding="utf-8")
+formatter = logging.Formatter("%(asctime)s | %(levelname)s | %(message)s")
+file_handler.setFormatter(formatter)
+logger.addHandler(file_handler)
+console_handler = logging.StreamHandler(stream=sys.stdout)
+console_handler.setFormatter(formatter)
+logger.addHandler(console_handler)
+
+def handle_exc(t, v, tb):
+    if issubclass(t, KeyboardInterrupt):
+        return
+    logger.error("Uncaught Exception", exc_info=(t, v, tb))
+sys.excepthook = handle_exc
+
+# ——— Persistence Helpers ———
+def load_json(path, default=None):
+    if os.path.exists(path):
+        with open(path, "r") as f:
+            return json.load(f)
+    return default
+
+def save_json(path, data):
+    with open(path, "w") as f:
+        json.dump(data, f, indent=2)
+
+def load_selected_theme():
+    data = load_json(SELECTED_THEME_PATH, default={}) or {}
+    return data.get("theme", "Dark")    # fallback to Dark
+
+def save_selected_theme(theme_name):
+    save_json(SELECTED_THEME_PATH, {"theme": theme_name})
+
+# ——— Theme Management ———
+def load_themes():
+    """Load themes.json (create it with defaults if missing)."""
+    if not os.path.exists(THEMES_PATH):
+        default = {
+            "sakura": {
+                "bg": "#ffeef2",
+                "fg": "#5c2a2a",
+                "button_bg": "#f7cad0",
+                "button_fg": "#5c2a2a"
+            },
+            "Dark": {
+                "bg": "#000000",      # true black background
+                "fg": "#ffffff",      # white text
+                "button_bg": "#333333",
+                "button_fg": "#ffffff",
+                "module": "themes.darkmode"
+            }
+        }
+        save_json(THEMES_PATH, default)
+        return default
+    return load_json(THEMES_PATH, {}) or {}
+
+def apply_theme(root, theme):
+    try:
+        # accept both sets of key names
+        bg          = theme.get("bg",          theme.get("background",   "#ffffff"))
+        fg          = theme.get("fg",          theme.get("foreground",   "#000000"))
+        button_bg   = theme.get("button_bg",   theme.get("bg",           bg))
+        button_fg   = theme.get("button_fg",   theme.get("fg",           fg))
+
+        root.configure(bg=bg)
+
+        def recurse(w):
+            cls = w.__class__.__name__
+            if cls in ("Frame", "LabelFrame", "PanedWindow", "Toplevel"):
+                w.configure(bg=bg)
+            elif cls == "Label":
+                w.configure(bg=bg, fg=fg)
+            elif cls == "Button":
+                w.configure(bg=button_bg, fg=button_fg)
+            elif cls in ("Text", "ScrolledText"):
+                w.configure(bg=bg, fg=fg, insertbackground=fg)
+            elif cls == "Combobox":
+                w.configure(background=bg, foreground=fg)
+            for c in w.winfo_children():
+                recurse(c)
+
+        recurse(root)
+        ui_log(f"Applied theme BG={bg} FG={fg}", "info")
+
+    except Exception as e:
+        ui_log(f"Theme apply failed: {e}", "error")
+
+
+# ——— Apps DB ———
+def load_apps_db():
+    global apps_db
+    apps_db = load_json(APPS_DB_PATH, default={}) or {}
+
+def save_apps_db():
+    save_json(APPS_DB_PATH, apps_db)
+
+def learn_apps():
+    found = {}
+    for rd in (os.environ.get("ProgramFiles",""), os.environ.get("ProgramFiles(x86)","")):
+        for exe in glob.glob(os.path.join(rd, "**", "*.exe"), recursive=True):
+            name = os.path.splitext(os.path.basename(exe))[0].lower()
+            found[name] = exe
+    sm = os.path.join(os.environ.get("APPDATA",""), r"Microsoft\Windows\Start Menu\Programs")
+    for lnk in glob.glob(os.path.join(sm, "**", "*.lnk"), recursive=True):
+        name = os.path.splitext(os.path.basename(lnk))[0].lower()
+        found[name] = lnk
+    apps_db.clear()
+    apps_db.update(found)
+    save_apps_db()
+    ui_log(f"Learned {len(apps_db)} apps", "info")
+
+# ——— Mic Management ———
+def load_selected_mic():
+    global selected_mic
+    data = load_json(SELECTED_MIC_PATH, default={}) or {}
+    selected_mic.set(data.get("selected_mic", 0))
+    ui_log("Loaded selected mic", "info")
+
+def save_selected_mic():
+    save_json(SELECTED_MIC_PATH, {"selected_mic": selected_mic.get()})
+    ui_log("Saved selected mic", "info")
+
+# ——— Media ———
+def send_media(key):
+    try:
+        pyautogui.press(key)
+        ui_log(f"Media:{key}", "info")
+    except Exception as e:
+        ui_log(f"Media failed:{e}", "error")
+
+# ——— Window ———
+def focus_app_window(name):
+    try:
+        wins = gw.getWindowsWithTitle(name)
+        if wins:
+            w=wins[0]; w.activate(); w.restore(); w.maximize()
+            return True
+    except:
+        pass
+    return False
+
+def is_process_running(name):
+    for p in psutil.process_iter(['name']):
+        try:
+            if name.lower() in p.info['name'].lower():
+                return True
+        except:
+            pass
+    return False
+
+# ——— Command Handlers ———
+def handle_open(args):
+    name=" ".join(args)
+    path=apps_db.get(name)
+    if not path:
+        ui_log(f"Unknown app:{name}", "warning"); return
+    if is_process_running(name):
+        ui_log(f"{name} running; focusing","info")
+        focus_app_window(name)
+    else:
+        try:
+            if path.lower().endswith('.lnk'): os.startfile(path)
+            else: subprocess.Popen(path)
+            ui_log(f"Opened {name}","info")
+        except Exception as e:
+            ui_log(f"Open failed:{e}","error")
+
+def handle_switch(args):
+    nm=" ".join(args)
+    if not focus_app_window(nm):
+        ui_log(f"Can't switch:{nm}","warning")
+
+def handle_close(args):
+    nm=" ".join(args)
+    exe=nm+".exe"
+    try:
+        subprocess.call(["taskkill","/f","/im",exe],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+        ui_log(f"Closed {nm}","info")
+    except Exception as e:
+        ui_log(f"Close failed:{e}","error")
+
+# ——— Core Execution ———
+def execute_command(text):
+    show_feedback(f"Processing: {text}")
+    cmd=text.lower().split()
+    if not cmd: return
+    if cmd[0] in ("learn","learn apps"):
+        learn_apps(); show_feedback("Apps relearned"); return
+    if cmd[0]=="open":
+        handle_open(cmd[1:]); show_feedback(f"Opened {cmd[1]}"); return
+    if cmd[0]=="switch":
+        handle_switch(cmd[1:]); show_feedback(f"Switched"); return
+    if cmd[0]=="close":
+        handle_close(cmd[1:]); show_feedback(f"Closed {cmd[1]}"); return
+
+    media_map={"play":"playpause","pause":"playpause","next":"nexttrack",
+               "previous":"prevtrack","volume up":"volumeup","volume down":"volumedown"}
+    for phrase,key in media_map.items():
+        if phrase in text.lower():
+            send_media(key)
+            show_feedback(f"Media:{phrase}")
+            return
+
+    if text.lower().startswith("good morning"):
+        wake_up()  # assume defined
+        show_feedback("Good morning!")
+        return
+
+    ui_log(f"No action for:{text}","warning")
+    show_feedback("No action")
+
+# ——— Listening ———
+def listen_once():
+    idx=selected_mic.get()
+    ui_log(f"Mic idx {idx}","debug")
+    try:
+        with sr.Microphone(device_index=idx) as src:
+            recognizer.adjust_for_ambient_noise(src,0.5)
+            ui_log("Listening…","debug")
+            audio=recognizer.listen(src,timeout=2,phrase_time_limit=10)
+    except Exception as e:
+        ui_log(f"Mic error:{e}","error"); return
+    try:
+        txt=recognizer.recognize_google(audio)
+        ui_log(f"Heard:{txt}","info")
+        execute_command(txt)
+    except sr.UnknownValueError:
+        ui_log("No understand","warning"); show_feedback("…")
+    except sr.RequestError as e:
+        ui_log(f"Rec error:{e}","error"); show_feedback("Error")
+
+def listen_loop():
+    global keep_listening
+    while keep_listening:
+        listen_once()
+
+def start_listening():
+    global keep_listening
+    if keep_listening:
+        ui_log("Already listening","warning"); return
+    keep_listening=True
+    threading.Thread(target=listen_loop,daemon=True).start()
+
+def stop_listening():
+    global keep_listening
+    keep_listening=False
+
+# ——— UI ———
+def ui_log(msg, level="info"):
+    getattr(logger, level)(msg)
+    if log_widget:
+        log_widget.insert(tk.END, msg+"\n")
+        log_widget.see(tk.END)
+
+def show_feedback(msg, duration=1500):
+    for w in feedback_frame.winfo_children():
+        w.destroy()
+    lbl = tk.Label(feedback_frame, text=msg)
+    lbl.pack(fill=tk.X)
+    main_root.after(duration, lbl.destroy)
+
+def open_mic_selection():
+    global main_root
+    win=Toplevel(main_root)
+    win.title("Settings")
+    win.geometry("300x200")
+
+    tk.Label(win, text="Microphone").pack(pady=5)
+    combo=ttk.Combobox(win, values=microphones, state="readonly", width=30)
+    combo.current(selected_mic.get())
+    combo.pack(pady=5)
+    combo.bind("<<ComboboxSelected>>", lambda e: selected_mic.set(combo.current()))
+
+    themes=load_themes()
+    names=list(themes.keys())
+    current_theme = tk.StringVar(value=names[0])
+    tk.Label(win, text="Theme").pack(pady=5)
+    tcombo = ttk.Combobox(win, values=names, state="readonly", width=30, textvariable=current_theme)
+    tcombo.pack(pady=5)
+
+    def apply_changes():
+        save_selected_mic()
+        sel = current_theme.get()
+        theme = themes[sel]
+        apply_theme(main_root, theme)
+        save_selected_theme(sel)
+        # persist the selection
+        save_selected_theme(sel)
+        modname = theme.get("module")
+        if modname:
+            try:
+               import importlib
+               m = importlib.import_module(modname)
+               if hasattr(m, "apply_animation"):
+                   m.apply_animation(main_root)
+                   ui_log(f"Anim from {modname}", "info")
+            except Exception as e:
+                ui_log(f"Anim load fail:{e}", "error")
+        win.destroy()
+
+
+       
+
+    tk.Button(win, text="Apply", command=apply_changes).pack(pady=10)
+
+def build_ui():
+    global main_root, microphones, selected_mic, log_widget, feedback_frame
+
+    main_root = tk.Tk()
+    root = main_root
+    root.title("Voice Assistant")
+    root.geometry("500x380")
+    root.resizable(True, True)
+
+    # 1) Load themes & pick the saved one
+    themes = load_themes()
+    chosen_name = load_selected_theme()                    # e.g. "Dark"
+    chosen_theme = themes.get(chosen_name, themes["Dark"])
+
+    # 2) Mic & apps setup
+    selected_mic = tk.IntVar(value=0)
+    microphones = sr.Microphone.list_microphone_names()
+    load_selected_mic()
+    load_apps_db()
+
+    # 3) Build your UI (all widgets created here)
+    # Status / Feedback panel
+    container = tk.Frame(root)
+    container.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+    container.columnconfigure(0, weight=1)
+    container.rowconfigure(0, weight=1)
+    feedback_frame = tk.LabelFrame(container, text="Status")
+    feedback_frame.grid(row=0, column=0, sticky="nsew", padx=5, pady=5)
+
+    # Old log below in a PanedWindow
+    pw = PanedWindow(root, orient=tk.VERTICAL)
+    pw.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+    log_widget = scrolledtext.ScrolledText(pw, height=6)
+    pw.add(log_widget)
+
+    # Gear button
+    gear = tk.Button(root, text="⚙️", command=open_mic_selection, width=4)
+    gear.place(relx=1.0, x=-10, y=10, anchor="ne")
+
+    # Bottom controls
+    button_frame = tk.Frame(root)
+    button_frame.pack(side=tk.BOTTOM, fill=tk.X, pady=5)
+    tk.Button(button_frame, text="Start", command=start_listening, width=12).pack(side=tk.LEFT, padx=5)
+    tk.Button(button_frame, text="Stop",  command=stop_listening,  width=12).pack(side=tk.LEFT, padx=5)
+    tk.Button(button_frame, text="Relearn Apps", command=learn_apps, width=12).pack(side=tk.LEFT, padx=5)
+
+    # 4) **Reapply** the chosen theme **after** everything exists
+    apply_theme(root, chosen_theme)
+
+    ui_log("Ready.", "info")
+    return root
+
+if __name__ == "__main__":
+    app = build_ui()
+    app.mainloop()

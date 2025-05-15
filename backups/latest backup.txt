@@ -1,0 +1,288 @@
+import tkinter as tk
+from tkinter import ttk, scrolledtext
+import speech_recognition as sr
+import subprocess
+import threading
+import logging
+from logging.handlers import RotatingFileHandler
+import os, sys, time, json, glob
+import pyautogui
+import psutil
+import pygetwindow as gw
+import win32gui
+import win32con
+
+
+
+# ——— Setup Logging ———
+log_path = os.path.join(os.path.dirname(__file__), "assistant.log")
+logger = logging.getLogger("VA")
+logger.setLevel(logging.DEBUG)
+fh = RotatingFileHandler(log_path, maxBytes=1_000_000, backupCount=3, encoding="utf-8")
+fmt = logging.Formatter("%(asctime)s | %(levelname)s | %(message)s")
+fh.setFormatter(fmt)
+logger.addHandler(fh)
+
+# Set UTF-8 encoding for console output to handle non-ASCII characters
+ch = logging.StreamHandler(stream=sys.stdout)
+ch.setFormatter(fmt)
+ch.stream = sys.stdout  # Explicitly set the stream to sys.stdout
+ch.setStream(sys.stdout)  # Ensure stream handler is using sys.stdout
+logger.addHandler(ch)
+
+# Fix to catch uncaught exceptions
+def handle_exc(t, v, tb):
+    if issubclass(t, KeyboardInterrupt):
+        return
+    logger.error("Uncaught", exc_info=(t, v, tb))
+
+sys.excepthook = handle_exc
+
+
+# ——— Globals ———
+recognizer = sr.Recognizer()
+microphones = []
+selected_mic = None
+txt = None
+keep_listening = False
+apps_db = {}
+apps_db_path = os.path.join(os.path.dirname(__file__), "apps.json")
+
+# ——— Persistence & App Learning ———
+def load_apps_db():
+    global apps_db
+    if os.path.exists(apps_db_path):
+        with open(apps_db_path, "r") as f:
+            apps_db = json.load(f)
+
+def save_apps_db():
+    with open(apps_db_path, "w") as f:
+        json.dump(apps_db, f, indent=2)
+
+def learn_apps():
+    found = {}
+    for root_dir in [os.environ.get("ProgramFiles", ""), os.environ.get("ProgramFiles(x86)", "")]:
+        for exe in glob.glob(os.path.join(root_dir, "**", "*.exe"), recursive=True):
+            name = os.path.splitext(os.path.basename(exe))[0].lower()  # Normalize to lowercase
+            found[name] = exe
+    sm = os.path.join(os.environ.get("APPDATA", ""), r"Microsoft\Windows\Start Menu\Programs")
+    for lnk in glob.glob(os.path.join(sm, "**", "*.lnk"), recursive=True):
+        name = os.path.splitext(os.path.basename(lnk))[0].lower()  # Normalize to lowercase
+        found[name] = lnk
+    apps_db.clear()
+    apps_db.update(found)
+    save_apps_db()
+    ui_log(f"Learned {len(apps_db)} apps", "info")
+
+
+# ——— Media Control ———
+def send_media(key):
+    try:
+        pyautogui.press(key)
+        ui_log(f"Media key: {key}", "info")
+    except Exception as e:
+        ui_log(f"Media control failed: {e}", "error")
+
+# ——— Window Focus ———
+def focus_app_window(app_name):
+    windows = gw.getWindowsWithTitle(app_name)
+    if not windows:
+        for w in gw.getAllWindows():
+            if app_name.lower() in w.title.lower():
+                w.activate()  # Simply activate the window without forcing it to the front
+                ui_log(f"Switched to {w.title}", "info")
+                return True
+        ui_log(f"No window with title matching: {app_name}", "warning")
+        return False
+    else:
+        windows[0].activate()  # Activate the window if it's found
+        ui_log(f"Switched to {windows[0].title}", "info")
+        return True
+
+
+def is_process_running(app_name):
+    for proc in psutil.process_iter(['name']):
+        try:
+            if app_name.lower() in proc.info['name'].lower():
+                return True
+        except:
+            continue
+    return False
+
+# ——— Wake-Up Routine ———
+def wake_up():
+    now = time.strftime("%H:%M")
+    ui_log(f"Good morning! It’s {now}.", "info")
+    ui_log("Today’s agenda: (not set)", "info")
+
+# ——— Command Dispatch ———
+def execute_command(text):
+    cmd = text.lower().split()
+    if not cmd:
+        return
+
+    # — Learn Apps —
+    if cmd[0] in ("learn", "learn apps"):
+        learn_apps()
+        return
+
+    # — Open App —
+    if cmd[0] == "open" and len(cmd) > 1:
+        name = " ".join(cmd[1:])
+        path = apps_db.get(name)
+        exe_name = name + ".exe"
+
+        if path:
+            if is_process_running(name):
+                ui_log(f"{name} is already running. Switching to it...", "info")
+                focus_app_window(name)
+            else:
+                try:
+                    if path.lower().endswith('.lnk'):
+                        os.startfile(path)
+                    else:
+                        subprocess.Popen(path)
+                    ui_log(f"Opened {name}", "info")
+                except Exception as e:
+                    ui_log(f"Failed to open {name}: {e}", "error")
+        else:
+            ui_log(f"App not known: {name}", "warning")
+        return
+
+    # — Switch To App —
+    if cmd[0] == "switch" and len(cmd) > 2 and cmd[1] == "to":
+        name = " ".join(cmd[2:])
+        success = focus_app_window(name)
+        if not success:
+            ui_log(f"Could not switch to {name}", "warning")
+        return
+
+    # — Close App —
+    if cmd[0] == "close" and len(cmd) > 1:
+        name = " ".join(cmd[1:])
+        path = apps_db.get(name)
+        if path:
+            exe_name = None
+            if path.lower().endswith('.lnk'):
+                exe_name = name + ".exe"
+            else:
+                exe_name = os.path.basename(path)
+            if exe_name:
+                try:
+                    subprocess.call(["taskkill", "/f", "/im", exe_name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    ui_log(f"Closed {name}", "info")
+                except Exception as e:
+                    ui_log(f"Failed to close {name}: {e}", "error")
+            else:
+                ui_log(f"Could not determine executable for {name}", "warning")
+        else:
+            ui_log(f"App not known: {name}", "warning")
+        return
+
+    # — Media Commands —
+    media_commands = {
+        "play": "playpause",
+        "pause": "playpause",
+        "next": "nexttrack",
+        "previous": "prevtrack",
+        "volume up": "volumeup",
+        "turn volume up": "volumeup",
+        "volume down": "volumedown",
+        "turn volume down": "volumedown"
+    }
+
+    for phrase, key in media_commands.items():
+        if phrase in text.lower():
+            send_media(key)
+            return
+
+    # — Wake-Up —
+    if text.lower().startswith("good morning"):
+        wake_up()
+        return
+
+    # — No match —
+    ui_log(f"No action for: «{text}»", "warning")
+
+# ——— Listening Loop ———
+def listen_once():
+    mic_idx = selected_mic.get()
+    ui_log(f"Mic #{mic_idx}: {microphones[mic_idx]}", "debug")
+    try:
+        with sr.Microphone(device_index=mic_idx) as src:
+            recognizer.adjust_for_ambient_noise(src, 0.5)
+            ui_log("Listening…", "debug")
+            audio = recognizer.listen(src, timeout=5, phrase_time_limit=7)
+    except Exception as e:
+        ui_log(f"Mic error: {e}", "error")
+        return
+
+    try:
+        text = recognizer.recognize_google(audio)
+        ui_log(f"Heard: «{text}»", "info")
+        execute_command(text)
+    except sr.UnknownValueError:
+        ui_log("Couldn't understand audio", "warning")
+    except sr.RequestError as e:
+        ui_log(f"Recognition error: {e}", "error")
+
+def listen_loop():
+    global keep_listening
+    while keep_listening:
+        listen_once()
+        time.sleep(0.2)
+
+def start_listening():
+    global keep_listening
+    if keep_listening:
+        ui_log("Already listening", "warning")
+        return
+    keep_listening = True
+    threading.Thread(target=listen_loop, daemon=True).start()
+
+def stop_listening():
+    global keep_listening
+    keep_listening = False
+
+# ——— UI ———
+def ui_log(msg, level="info"):
+    getattr(logger, level)(msg)
+    if txt:
+        txt.insert(tk.END, msg + "\n")
+        txt.see(tk.END)
+
+def build_ui():
+    global microphones, selected_mic, txt
+    root = tk.Tk()
+    root.title("VA")
+    root.geometry("500x380")
+
+    selected_mic = tk.IntVar(value=0)
+    recognizer = sr.Recognizer()
+    microphones = sr.Microphone.list_microphone_names()
+    load_apps_db()
+
+    frame = tk.Frame(root)
+    frame.pack(pady=5)
+    tk.Label(frame, text="Mic:").pack(side=tk.LEFT)
+    combo = ttk.Combobox(frame, values=microphones, state="readonly", width=40)
+    combo.current(0)
+    combo.pack(side=tk.LEFT)
+    combo.bind("<<ComboboxSelected>>", lambda e: selected_mic.set(combo.current()))
+
+    btn_frame = tk.Frame(root)
+    btn_frame.pack(pady=5)
+    tk.Button(btn_frame, text="Start", command=start_listening).pack(side=tk.LEFT, padx=5)
+    tk.Button(btn_frame, text="Stop", command=stop_listening).pack(side=tk.LEFT, padx=5)
+    tk.Button(btn_frame, text="Relearn Apps", command=learn_apps).pack(side=tk.LEFT, padx=5)
+
+    txt_scroll = scrolledtext.ScrolledText(root, wrap=tk.WORD, height=15)
+    txt_scroll.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+    txt = txt_scroll
+
+    ui_log("Ready.", "info")
+    return root
+
+if __name__ == "__main__":
+    app = build_ui()
+    app.mainloop()
