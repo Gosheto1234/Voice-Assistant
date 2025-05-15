@@ -8,7 +8,7 @@ import logging
 from logging.handlers import RotatingFileHandler
 import random
 import time
-import requests
+
 
 
 
