@@ -34,7 +34,7 @@ SELECTED_MIC_PATH = os.path.join(os.path.dirname(__file__), "selected_mic.json")
 THEMES_PATH = os.path.join(os.path.dirname(__file__), "themes.json")
 SELECTED_THEME_PATH = os.path.join(os.path.dirname(__file__), "selected_theme.json")
 MEDIA_CFG_PATH = os.path.join(os.path.dirname(__file__), "media_players.json")
-
+MUSIC_EXTENSIONS = ('.mp3', '.flac', '.wav', '.aac', '.ogg', '.m4a')
 
 recognizer = sr.Recognizer()
 microphones = []
@@ -44,6 +44,8 @@ keep_listening = False
 apps_db = {}
 main_root = None
 status_label = None
+music_db = {}
+
 
 
 # App version
@@ -535,7 +537,22 @@ def execute_command(text):
                 show_feedback(f"Затворих: {' '.join(args)}")
             return
 
-        # ——— Media control ———
+    # ——— Play File ———
+    if cmd[0] == "play" and cmd[1] == "file":
+        song_query = " ".join(cmd[2:]).lower()
+        match = None
+        for name, path in music_db.items():
+            if song_query in name:
+                match = path
+                break
+        if match:
+            os.startfile(match)
+            show_feedback(f"Playing: {os.path.basename(match)}")
+        else:
+            show_feedback("Song not found.")
+        return
+
+    # ——— Media control ———
     for action, keywords in media_map.items():
         if any(k in lower for k in keywords):
             # 1) See if any known player is already running
@@ -562,8 +579,8 @@ def execute_command(text):
             if key:
                 if hwnd:
                     activate_window(hwnd)
-                    time.sleep(0.1) 
-                
+                    time.sleep(0.1)
+
                 show_feedback(f"{name}: {action}")
             else:
                 ui_log(f"No key mapping for {action} in {name}", "warning")
