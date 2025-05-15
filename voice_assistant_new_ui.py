@@ -136,7 +136,8 @@ def version_tuple(v):
 
 def check_for_update():
     GITHUB_API_LATEST_RELEASE = "https://api.github.com/repos/Gosheto1234/Voice-Assistant/releases/latest"
-    UPDATE_ZIP_PATH = "update.zip"
+    UPDATE_EXE_PATH = "update_new.exe"
+
 
     try:
         print("Checking for updates...")
@@ -155,10 +156,10 @@ def check_for_update():
             print(f"Changelog:\n{changelog}")
 
             r = requests.get(download_url)
-            with open(UPDATE_ZIP_PATH, "wb") as f:
+            with open(UPDATE_EXE_PATH, "wb") as f:
                 f.write(r.content)
 
-            subprocess.Popen(["updater.exe", UPDATE_ZIP_PATH, sys.argv[0]])
+            subprocess.Popen(["updater.exe", UPDATE_EXE_PATH, sys.argv[0]])
             sys.exit(0)
         else:
             print("You're up to date.")
