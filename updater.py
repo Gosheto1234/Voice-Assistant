@@ -16,11 +16,9 @@ def main():
     print(f"Replacing {old_file} with {new_file}")
 
     try:
-        # Wait for old process to fully exit
-        time.sleep(2)
+        time.sleep(2)  # Let the old process fully exit
 
-        # On Windows, you can't overwrite a running exe,
-        # so we rename the old one first (optional)
+        # Optional: Rename old file before replacement
         backup = old_file + ".bak"
         if os.path.exists(backup):
             os.remove(backup)
@@ -31,7 +29,7 @@ def main():
         print("Replacement done.")
 
         # Relaunch the updated app
-        subprocess.Popen([old_file])
+        subprocess.Popen([old_file], close_fds=True)
         print("App restarted.")
 
     except Exception as e:
