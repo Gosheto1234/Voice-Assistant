@@ -28,7 +28,7 @@ import zipfile
 
 
 # ——— Configuration & Globals ———
-LOG_PATH = os.path.join(os.path.dirname(__file__), "assistant.log")
+LOG_PATH = os.path.join(os.getcwd(), "assistant.log")
 APPS_DB_PATH = os.path.join(os.path.dirname(__file__), "apps.json")
 SELECTED_MIC_PATH = os.path.join(os.path.dirname(__file__), "selected_mic.json")
 THEMES_PATH = os.path.join(os.path.dirname(__file__), "themes.json")
