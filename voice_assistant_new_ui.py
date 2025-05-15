@@ -159,6 +159,20 @@ def check_for_update():
         logger.error(f"Update check failed: {e}")
 
 
+def resource_path(relative_path):
+    """
+    Return the absolute path to a bundled resource, whether running
+    as a script or in a PyInstaller one-file executable.
+    """
+    if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
+        # PyInstaller bundles files here
+        base_path = sys._MEIPASS
+    else:
+        # Running in development
+        base_path = os.path.dirname(__file__)
+    return os.path.join(base_path, relative_path)
+
+
 
 
 # ——— Win32 Helpers for Enumerating & Activating Windows ———
@@ -830,7 +844,7 @@ def build_ui():
     gear.place(relx=1.0, x=-10, y=10, anchor="ne")
 
     # Dog instance
-    gif_path = os.path.join(os.path.dirname(__file__), "annoying_dog.gif")
+    gif_path = resource_path("annoying_dog.gif")
     dog = AnimatedDog(animation_canvas, gif_path, bowl_x, bowl_y, bowl_radius, food_text)
     dog.bowl_id = bowl_id
 
