@@ -1,47 +1,45 @@
 name: Build, Tag, and Release
 
 on:
-  workflow_dispatch:        # Manual trigger
+  workflow_dispatch:
   push:
-    branches: [ main ]      # Or whichever branch you choose
+    branches: [ main ]
 
 jobs:
   build-and-release:
     runs-on: windows-latest
     permissions:
-      contents: write       # Needed for tag push & release creation
+      contents: write
 
     steps:
-      - name: Checkout full history
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
-          fetch-depth: 0        # Required to tag previous commits
+          fetch-depth: 0
 
       - name: Determine new tag
         id: tag
+        shell: bash                # <<— use Bash on Windows
         run: |
-          # Example: use run number for simplicity
           NEW_TAG="v0.0.${{ github.run_number }}"
           echo "New tag is $NEW_TAG"
           echo "tag=$NEW_TAG" >> $GITHUB_OUTPUT
 
       - name: Create Git tag
         run: |
-          git config user.name "GitHub Actions"
-          git config user.email "actions@github.com"
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
           git tag ${{ steps.tag.outputs.tag }}
           git push origin ${{ steps.tag.outputs.tag }}
 
-      - name: Set up Python 3.12
+      - name: Set up Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.12'
 
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install pyinstaller
+          pip install --upgrade pip
+          pip install -r requirements.txt pyinstaller
 
       - name: Build executable
         run: |
@@ -54,8 +52,6 @@ jobs:
         with:
           tag_name: ${{ steps.tag.outputs.tag }}
           release_name: Release ${{ steps.tag.outputs.tag }}
-          draft: false
-          prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
