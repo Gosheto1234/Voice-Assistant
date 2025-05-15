@@ -1,0 +1,6 @@
+SpeechRecognition
+pyautogui
+psutil
+pygetwindow
+Pillow
+pywin32
