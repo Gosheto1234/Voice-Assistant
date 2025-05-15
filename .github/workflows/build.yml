@@ -45,7 +45,7 @@ jobs:
 
           
       - name: Build updater
-        run: pyinstaller --onefile updater.py
+        run: pyinstaller --onefile --clean --noupx updater.py
 
 
 
