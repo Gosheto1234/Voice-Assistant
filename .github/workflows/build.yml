@@ -2,8 +2,9 @@ name: Build Windows executable
 
 on:
   push:
-    branches:
-      - main  # or your default branch
+    tags:
+      - 'v*'  # Triggers only on version tags like v1.0.0
+  workflow_dispatch:
 
 jobs:
   build-win:
@@ -26,10 +27,19 @@ jobs:
 
       - name: Build executable with PyInstaller
         run: |
-          pyinstaller --onefile --windowed --icon=icon/icon.ico voice_assistant_new_ui.py
+          pyinstaller --onefile --windowed --icon=icon.ico voice_assistant_new_ui.py
 
-      - name: Upload artifact
-        uses: actions/download-artifact@v4.3.0
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
         with:
-          name: voice-assistant-exe
-          path: dist/voice_assistant.exe
+          tag_name: ${{ github.ref_name }}
+          name: Release ${{ github.ref_name }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload .exe to Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: dist/voice_assistant_new_ui.exe
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
