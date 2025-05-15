@@ -5,20 +5,22 @@ on:
   push:
     branches: [ main ]
 
+permissions:
+  contents: write
+
 jobs:
   build-and-release:
     runs-on: windows-latest
-    permissions:
-      contents: write
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
       - name: Determine new tag
         id: tag
-        shell: bash                # <<— use Bash on Windows
+        shell: bash
         run: |
           NEW_TAG="v0.0.${{ github.run_number }}"
           echo "New tag is $NEW_TAG"
@@ -38,15 +40,18 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install --upgrade pip
+          python -m pip install --upgrade pip
           pip install -r requirements.txt pyinstaller
 
       - name: Build executable
-        run: pyinstaller --onefile --windowed --icon=icon.ico voice_assistant_new_ui.py
+        run: |
+          pyinstaller --onefile --windowed --icon=icon.ico \
+            --name VoiceAssistant.exe \
+            voice_assistant_new_ui.py
 
       - name: Create GitHub Release
-        uses: actions/create-release@v1
         id: create_release
+        uses: actions/create-release@v1
         with:
           tag_name: ${{ steps.tag.outputs.tag }}
           release_name: Release ${{ steps.tag.outputs.tag }}
@@ -59,6 +64,6 @@ jobs:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
           asset_path: dist/VoiceAssistant.exe
           asset_name: VoiceAssistant.exe
+          asset_content_type: application/octet-stream
         env:
-            GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
