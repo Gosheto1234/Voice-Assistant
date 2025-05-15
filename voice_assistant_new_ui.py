@@ -8,6 +8,7 @@ import logging
 from logging.handlers import RotatingFileHandler
 import random
 import time
+import requests
 
 
 
@@ -23,6 +24,7 @@ import win32gui
 import win32con
 import win32process
 import difflib
+import zipfile
 
 
 # ——— Configuration & Globals ———
@@ -47,6 +49,9 @@ status_label = None
 # App version
 LOCAL_VERSION = "1.0.0"
 
+#update stuff
+VERSION_JSON_URL = "https://raw.githubusercontent.com/Gosheto1234/Voice-Assistant/main/version.json"
+UPDATE_ZIP_PATH = "update.zip"
 
 # Only Status/Feedback panel
 feedback_frame = None
@@ -113,6 +118,45 @@ def load_media_players():
     return available
 
 media_players = load_media_players()
+
+#App update check
+
+
+def version_tuple(v):
+    return tuple(map(int, (v.split("."))))
+
+def check_for_update():
+    try:
+        logger.info("Checking for updates...")
+        response = requests.get(VERSION_JSON_URL)
+        response.raise_for_status()
+        data = response.json()
+        remote_version = data.get("version")
+        download_url = data.get("url")
+        changelog = data.get("changelog", "")
+
+        if version_tuple(remote_version) > version_tuple(LOCAL_VERSION):
+            logger.info(f"New version {remote_version} available!")
+            logger.info(f"Changelog:\n{changelog}")
+
+            # Download update zip
+            r = requests.get(download_url)
+            with open(UPDATE_ZIP_PATH, "wb") as f:
+                f.write(r.content)
+            logger.info("Update downloaded.")
+
+            # Extract update
+            with zipfile.ZipFile(UPDATE_ZIP_PATH, 'r') as zip_ref:
+                zip_ref.extractall(".")  # Overwrite current files
+            os.remove(UPDATE_ZIP_PATH)
+            logger.info("Update installed! Restarting the app...")
+
+            # Exit so user can restart app manually
+            sys.exit(0)
+        else:
+            logger.info("App is up to date.")
+    except Exception as e:
+        logger.error(f"Update check failed: {e}")
 
 
 
@@ -800,6 +844,7 @@ def build_ui():
 
 
 if __name__ == "__main__":
+    check_for_update()
     app = build_ui()
     if app:
         app.mainloop()
