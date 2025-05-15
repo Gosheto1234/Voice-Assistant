@@ -43,6 +43,12 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt pyinstaller
 
+      - name: Get version from tag and write to version_info.py
+        run: |
+          $version = "${{ steps.tag.outputs.tag }}".TrimStart("v")
+          echo "__version__ = '$version'" | Out-File -Encoding ASCII version_info.py
+        shell: pwsh
+
       - name: Build executable
         run: pyinstaller --onefile --windowed --icon=icon.ico --name VoiceAssistant.exe --add-data "annoying_dog.gif;." voice_assistant_new_ui.py
 
