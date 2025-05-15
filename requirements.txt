@@ -4,3 +4,5 @@ psutil
 pygetwindow
 Pillow
 pywin32
+pyaudio
+pipwin
