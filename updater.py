@@ -1,24 +1,42 @@
-import sys, zipfile, os, time, subprocess
+import sys
+import os
+import shutil
+import time
+import subprocess
 
 def main():
-    if len(sys.argv) < 3:
-        print("Usage: updater.exe <update.zip> <main_app.exe>")
-        sys.exit(1)
+    if len(sys.argv) != 3:
+        print("Usage: updater.exe <new_file.exe> <old_file.exe>")
+        time.sleep(3)
+        return
 
-    zip_path = sys.argv[1]
-    main_app = sys.argv[2]
+    new_file = sys.argv[1]
+    old_file = sys.argv[2]
 
-    print("Waiting for main app to exit...")
-    time.sleep(2)  # Let the main app shut down
+    print(f"Replacing {old_file} with {new_file}")
 
-    print(f"Extracting {zip_path}...")
-    with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-        zip_ref.extractall(".")
-    os.remove(zip_path)
+    try:
+        # Wait for old process to fully exit
+        time.sleep(2)
 
-    print("Update complete. Restarting app...")
-    subprocess.Popen([main_app])
-    sys.exit(0)
+        # On Windows, you can't overwrite a running exe,
+        # so we rename the old one first (optional)
+        backup = old_file + ".bak"
+        if os.path.exists(backup):
+            os.remove(backup)
+        os.rename(old_file, backup)
+
+        # Move new file into place
+        shutil.move(new_file, old_file)
+        print("Replacement done.")
+
+        # Relaunch the updated app
+        subprocess.Popen([old_file])
+        print("App restarted.")
+
+    except Exception as e:
+        print(f"Update failed: {e}")
+        time.sleep(5)
 
 if __name__ == "__main__":
     main()
