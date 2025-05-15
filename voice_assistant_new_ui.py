@@ -44,6 +44,10 @@ main_root = None
 status_label = None
 
 
+# App version
+LOCAL_VERSION = "1.0.0"
+
+
 # Only Status/Feedback panel
 feedback_frame = None
 
