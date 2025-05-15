@@ -3,7 +3,7 @@ name: Build Windows executable
 on:
   push:
     tags:
-      - 'v*'  # Triggers only on version tags like v1.0.0
+      - '*'  # Triggers only on version tags 
   workflow_dispatch:
 
 jobs:
