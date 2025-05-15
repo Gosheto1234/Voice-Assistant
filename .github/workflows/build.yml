@@ -43,6 +43,13 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt pyinstaller
 
+          
+      - name: Build updater
+        run: pyinstaller --onefile updater.py
+
+
+
+      
       - name: Get version from tag and write to version_info.py
         run: |
           $version = "${{ steps.tag.outputs.tag }}".TrimStart("v")
@@ -60,6 +67,16 @@ jobs:
           release_name: Release ${{ steps.tag.outputs.tag }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload Updater Asset
+        uses: actions/upload-release-asset@v1
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: dist/updater.exe
+          asset_name: updater.exe
+          asset_content_type: application/octet-stream
+        env:
+           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload Release Asset
         uses: actions/upload-release-asset@v1
