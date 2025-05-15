@@ -49,7 +49,7 @@ music_db = {}
 
 
 # App version
-LOCAL_VERSION = "1.0.0"
+__version__ = "0.0.0"
 
 #update stuff
 VERSION_JSON_URL = "https://raw.githubusercontent.com/Gosheto1234/Voice-Assistant/main/version.json"
@@ -123,42 +123,46 @@ media_players = load_media_players()
 
 #App update check
 
+def get_local_version():
+    return __version__
+
+
 
 def version_tuple(v):
-    return tuple(map(int, (v.split("."))))
+    return tuple(map(int, re.sub("[^0-9.]", "", v).split(".")))
+
+
 
 def check_for_update():
+    GITHUB_API_LATEST_RELEASE = "https://api.github.com/repos/Gosheto1234/Voice-Assistant/releases/latest"
+    UPDATE_ZIP_PATH = "update.zip"
+
     try:
-        logger.info("Checking for updates...")
-        response = requests.get(VERSION_JSON_URL)
+        print("Checking for updates...")
+        response = requests.get(GITHUB_API_LATEST_RELEASE)
         response.raise_for_status()
         data = response.json()
-        remote_version = data.get("version")
-        download_url = data.get("url")
-        changelog = data.get("changelog", "")
 
-        if version_tuple(remote_version) > version_tuple(LOCAL_VERSION):
-            logger.info(f"New version {remote_version} available!")
-            logger.info(f"Changelog:\n{changelog}")
+        remote_version = data.get("tag_name")
+        download_url = data["assets"][0]["browser_download_url"]
+        changelog = data.get("body", "")
 
-            # Download update zip
+        local_version = get_local_version()
+
+        if version_tuple(remote_version) > version_tuple(local_version):
+            print(f"New version {remote_version} available!")
+            print(f"Changelog:\n{changelog}")
+
             r = requests.get(download_url)
             with open(UPDATE_ZIP_PATH, "wb") as f:
                 f.write(r.content)
-            logger.info("Update downloaded.")
 
-            # Extract update
-            with zipfile.ZipFile(UPDATE_ZIP_PATH, 'r') as zip_ref:
-                zip_ref.extractall(".")  # Overwrite current files
-            os.remove(UPDATE_ZIP_PATH)
-            logger.info("Update installed! Restarting the app...")
-
-            # Exit so user can restart app manually
+            subprocess.Popen(["updater.exe", UPDATE_ZIP_PATH, sys.argv[0]])
             sys.exit(0)
         else:
-            logger.info("App is up to date.")
+            print("You're up to date.")
     except Exception as e:
-        logger.error(f"Update check failed: {e}")
+        print(f"Update check failed: {e}")
 
 
 def resource_path(relative_path):
