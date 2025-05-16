@@ -172,7 +172,7 @@ def query_update():
 
         for asset in data["assets"]:
             if asset["name"] == "VoiceAssistant.exe":
-                download_url = asset["browser_download_url"]
+                download_url = asset["https://github.com/Gosheto1234/Voice-Assistant/releases"]
                 break
         changelog = data.get("body", "")
         return remote, url, changelog
