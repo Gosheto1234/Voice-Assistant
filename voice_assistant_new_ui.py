@@ -170,7 +170,10 @@ def query_update():
         if version_tuple(remote) <= version_tuple(local):
             return None
 
-        url       = data["assets"][0]["browser_download_url"]
+        for asset in data["assets"]:
+            if asset["name"] == "VoiceAssistant.exe":
+                download_url = asset["browser_download_url"]
+                break
         changelog = data.get("body", "")
         return remote, url, changelog
 
