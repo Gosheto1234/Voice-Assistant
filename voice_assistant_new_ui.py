@@ -173,11 +173,6 @@ def query_update():
     changelog = data.get("body", "")
     return remote, download_url, changelog
 
-
-    except Exception as e:
-        mb.showerror("Update Error", f"Failed to check for updates:\n{e}")
-        return None
-
 def perform_update(download_url):
     new_exe = "VoiceAssistant_new.exe"
     try:
