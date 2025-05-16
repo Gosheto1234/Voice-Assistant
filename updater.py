@@ -26,6 +26,8 @@ def main():
 
         # Move new file into place
         shutil.move(new_file, old_file)
+        with open("just_updated.flag", "w") as f:
+         f.write(new_file)  # or the new version tag
         print("Replacement done.")
 
         # Relaunch the updated app
