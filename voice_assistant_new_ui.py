@@ -150,69 +150,56 @@ def version_tuple(v):
 
 
 def query_update():
-    """
-    Check GitHub for a newer release.
-    Returns (remote_version, download_url, changelog) if an update exists,
-    or None if up-to-date or on error.
-    """
     GITHUB_API = "https://api.github.com/repos/Gosheto1234/Voice-Assistant/releases/latest"
-    try:
-        resp = requests.get(GITHUB_API)
-        resp.raise_for_status()
-        data = resp.json()
+    resp = requests.get(GITHUB_API)
+    resp.raise_for_status()
+    data = resp.json()
 
-        remote = data.get("tag_name", "").lstrip("v")
-        if not remote:
-            mb.showerror("Update Error", "Could not parse remote version.")
-            return None
+    remote = data.get("tag_name", "").lstrip("v")
+    local  = get_local_version()
+    if version_tuple(remote) <= version_tuple(local):
+        return None
 
-        local = get_local_version()
-        if version_tuple(remote) <= version_tuple(local):
-            return None
+    # find the exe asset
+    download_url = None
+    for asset in data["assets"]:
+        if asset["name"].lower() == "voiceassistant.exe":
+            download_url = asset["browser_download_url"]
+            break
+    if not download_url:
+        mb.showerror("Update Error", "Could not find VoiceAssistant.exe asset on GitHub.")
+        return None
 
-        for asset in data["assets"]:
-            if asset["name"] == "VoiceAssistant.exe":
-                download_url = asset["https://api.github.com/repos/Gosheto1234/Voice-Assistant/releases/latest"]
-                break
-        changelog = data.get("body", "")
-        return remote, url, changelog
+    changelog = data.get("body", "")
+    return remote, download_url, changelog
+
 
     except Exception as e:
         mb.showerror("Update Error", f"Failed to check for updates:\n{e}")
         return None
 
 def perform_update(download_url):
-    """
-    Download the new VoiceAssistant.exe, launch updater.exe to swap
-    it in place of the old one, and then exit this app.
-    """
-    # 1) Fetch the new VoiceAssistant.exe bytes
-    new_exe_name = "VoiceAssistant_new.exe"
+    new_exe = "VoiceAssistant_new.exe"
     try:
-        resp = requests.get(download_url, stream=True)
-        resp.raise_for_status()
-        with open(new_exe_name, "wb") as f:
-            for chunk in resp.iter_content(8192):
-                f.write(chunk)
+        r = requests.get(download_url); r.raise_for_status()
+        with open(new_exe, "wb") as f:
+            f.write(r.content)
     except Exception as e:
         mb.showerror("Update Error", f"Download failed:\n{e}")
         return
 
-    # 2) Locate your updater stub next to your running exe
-    #    sys.executable points to VoiceAssistant.exe when frozen
-    updater_path = os.path.join(os.path.dirname(sys.executable), "updater.exe")
+    # launcher stub (already bundled in your folder)
+    updater_path = resource_path("updater.exe")
     if not os.path.exists(updater_path):
         mb.showerror("Update Error", f"Cannot find updater.exe at:\n{updater_path}")
         return
 
-    # 3) Launch the stub to swap VoiceAssistant_new.exe → VoiceAssistant.exe
-    #    sys.argv[0] is the path to the current VoiceAssistant.exe
-    subprocess.Popen([updater_path, new_exe_name, sys.argv[0]], close_fds=True)
+    # tell the updater to swap in the new VoiceAssistant exe
+    subprocess.Popen([updater_path, new_exe, sys.argv[0]], close_fds=True)
 
-    # 4) Tear down the UI and force‐exit immediately
+    # shut down this UI
     try:
-        if 'main_root' in globals() and main_root:
-            main_root.destroy()
+        if main_root: main_root.destroy()
     except:
         pass
     os._exit(0)
