@@ -180,24 +180,33 @@ def query_update():
 
 def perform_update(download_url):
     """
-    Download the new exe, launch updater, and exit this app.
+    Download the new VoiceAssistant.exe, launch updater.exe to swap
+    it in place of the old one, and then exit this app.
     """
-    new_exe = "updater.exe"
+    # 1) Fetch the new VoiceAssistant.exe bytes
+    new_exe_name = "VoiceAssistant_new.exe"
     try:
-        r = requests.get(download_url)
-        r.raise_for_status()
-        with open(new_exe, "wb") as f:
-            f.write(r.content)
+        resp = requests.get(download_url, stream=True)
+        resp.raise_for_status()
+        with open(new_exe_name, "wb") as f:
+            for chunk in resp.iter_content(8192):
+                f.write(chunk)
     except Exception as e:
         mb.showerror("Update Error", f"Download failed:\n{e}")
         return
 
-    updater = os.path.join(os.path.dirname(sys.executable), "updater.exe")
-    if not os.path.exists(updater):
-        mb.showerror("Update Error", f"Cannot find updater.exe at:\n{updater}")
-        return     
-    subprocess.Popen([updater, new_exe, sys.argv[0]], close_fds=True)
-    # Close UI then force-exit
+    # 2) Locate your updater stub next to your running exe
+    #    sys.executable points to VoiceAssistant.exe when frozen
+    updater_path = os.path.join(os.path.dirname(sys.executable), "updater.exe")
+    if not os.path.exists(updater_path):
+        mb.showerror("Update Error", f"Cannot find updater.exe at:\n{updater_path}")
+        return
+
+    # 3) Launch the stub to swap VoiceAssistant_new.exe → VoiceAssistant.exe
+    #    sys.argv[0] is the path to the current VoiceAssistant.exe
+    subprocess.Popen([updater_path, new_exe_name, sys.argv[0]], close_fds=True)
+
+    # 4) Tear down the UI and force‐exit immediately
     try:
         if 'main_root' in globals() and main_root:
             main_root.destroy()
