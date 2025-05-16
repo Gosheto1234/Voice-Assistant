@@ -182,7 +182,7 @@ def perform_update(download_url):
     """
     Download the new exe, launch updater, and exit this app.
     """
-    new_exe = "update_new.exe"
+    new_exe = "updater.exe"
     try:
         r = requests.get(download_url)
         r.raise_for_status()
