@@ -965,25 +965,21 @@ def build_ui():
 
 
 if __name__ == "__main__":
-    # 1) First, optionally check for updates on startup
-    #    (uses the same query/perform logic as the Update button)
-    info = query_update()
-    if info:
-        remote, url, changelog = info
-        if mb.askyesno("Update Available",
-                       f"Version {remote} is available.\n\nChangelog:\n{changelog}\n\nInstall now?"):
-            perform_update(url)
-
-    # 2) Now, if we just came through an update, let the user know
+    # 1) If we just updated, notify and remove the flag
     if os.path.exists("just_updated.flag"):
-        try:
-            mb.showinfo("Updated", f"Application updated to {__version__}!")
-        finally:
-            os.remove("just_updated.flag")
+        mb.showinfo("Updated", f"Application updated to {__version__}!")
+        os.remove("just_updated.flag")
+    else:
+        # 2) Otherwise, check for updates on startup
+        info = query_update()
+        if info:
+            remote, url, changelog = info
+            if mb.askyesno("Update Available",
+                           f"Version {remote} is available.\n\nChangelog:\n{changelog}\n\nInstall now?"):
+                perform_update(url)
 
-    # 3) Build and run the UI
+    # 3) Build & launch UI
     music_db = build_music_db()
-    ui_log(f"Found {len(music_db)} music files on Desktop", "info")
     app = build_ui()
     if app:
         app.mainloop()
