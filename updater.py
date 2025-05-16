@@ -10,7 +10,7 @@ def main():
         time.sleep(3)
         return
 
-    new_file = sys.argv[1]
+    updater = sys.argv[1]
     old_file = sys.argv[2]
 
     print(f"Replacing {old_file} with {new_file}")
