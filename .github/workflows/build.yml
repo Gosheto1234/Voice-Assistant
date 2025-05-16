@@ -56,8 +56,11 @@ jobs:
           echo "__version__ = '$version'" | Out-File -Encoding ASCII version_info.py
         shell: pwsh
 
-      - name: Build executable
-        run: pyinstaller --onefile updater.py && pyinstaller --onefile --windowed --icon=icon.ico --name VoiceAssistant.exe --add-data "annoying_dog.gif;." --add-binary "dist/updater.exe;." voice_assistant_new_ui.py
+      - name: Build updater
+        run: pyinstaller --clean --onefile updater.py
+        
+      - name: Build main EXE
+        run: pyinstaller --clean --onefile --windowed --icon icon.ico --name VoiceAssistant.exe --add-data "annoying_dog.gif;." voice_assistant_new_ui.py
 
       - name: Create GitHub Release
         id: create_release
