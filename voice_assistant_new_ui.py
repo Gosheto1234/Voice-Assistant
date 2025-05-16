@@ -881,7 +881,6 @@ def build_ui():
     button_frame.pack(side=tk.BOTTOM, fill=tk.X, pady=5)
     tk.Button(button_frame, text="Start", command=start_listening, width=10).pack(side=tk.LEFT, padx=5)
     tk.Button(button_frame, text="Stop",  command=stop_listening,  width=10).pack(side=tk.LEFT, padx=5)
-    tk.Button(button_frame, text="ONUR",  command=stop_listening,  width=10).pack(side=tk.LEFT, padx=5)
     gear = tk.Button(root, text="⚙️", command=open_mic_selection, width=4)
     gear.place(relx=1.0, x=-10, y=10, anchor="ne")
 
