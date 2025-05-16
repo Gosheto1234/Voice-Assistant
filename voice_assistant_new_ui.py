@@ -37,6 +37,7 @@ SELECTED_MIC_PATH = os.path.join(os.path.dirname(__file__), "selected_mic.json")
 THEMES_PATH = os.path.join(os.path.dirname(__file__), "themes.json")
 SELECTED_THEME_PATH = os.path.join(os.path.dirname(__file__), "selected_theme.json")
 MEDIA_CFG_PATH = os.path.join(os.path.dirname(__file__), "media_players.json")
+USER_DESKTOP    = os.path.join(os.path.expanduser("~"), "Desktop")
 MUSIC_EXTENSIONS = ('.mp3', '.flac', '.wav', '.aac', '.ogg', '.m4a')
 
 recognizer = sr.Recognizer()
@@ -123,6 +124,18 @@ def load_media_players():
     return available
 
 media_players = load_media_players()
+
+
+def build_music_db():
+    """Scan the user’s Desktop (recursively) for music files."""
+    db = {}
+    for ext in MUSIC_EXTENSIONS:
+        pattern = os.path.join(USER_DESKTOP, '**', f'*{ext}')
+        for path in glob.glob(pattern, recursive=True):
+            name = os.path.splitext(os.path.basename(path))[0].lower()
+            db[name] = path
+    return db
+    
 
 #App update check
 
@@ -910,6 +923,8 @@ if __name__ == "__main__":
             os.remove("just_updated.flag")
 
     # 3) Build and run the UI
+    music_db = build_music_db()
+    ui_log(f"Found {len(music_db)} music files on Desktop", "info")
     app = build_ui()
     if app:
         app.mainloop()
