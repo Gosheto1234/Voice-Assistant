@@ -149,50 +149,72 @@ def version_tuple(v):
 
 
 
-def check_for_update():
-    GITHUB_API_LATEST_RELEASE = "https://api.github.com/repos/Gosheto1234/Voice-Assistant/releases/latest"
-    UPDATE_EXE_PATH = "update_new.exe"
-
+def query_update():
+    """
+    Check GitHub for a newer release.
+    Returns (remote_version, download_url, changelog) if an update exists,
+    or None if up-to-date or on error.
+    """
+    GITHUB_API = "https://api.github.com/repos/Gosheto1234/Voice-Assistant/releases/latest"
     try:
-        print("Checking for updates...")
-        response = requests.get(GITHUB_API_LATEST_RELEASE)
-        response.raise_for_status()
-        data = response.json()
+        resp = requests.get(GITHUB_API)
+        resp.raise_for_status()
+        data = resp.json()
 
-        # Strip leading 'v' if present
-        remote_version = data.get("tag_name", "0.0.0").lstrip("v")
-        download_url   = data["assets"][0]["browser_download_url"]
-        changelog      = data.get("body", "")
+        remote = data.get("tag_name", "").lstrip("v")
+        if not remote:
+            mb.showerror("Update Error", "Could not parse remote version.")
+            return None
 
-        local_version = get_local_version()
-        print(f"Local version: {local_version}, Remote version: {remote_version}")
+        local = get_local_version()
+        if version_tuple(remote) <= version_tuple(local):
+            return None
 
-        if version_tuple(remote_version) > version_tuple(local_version):
-            print(f"New version {remote_version} available!")
-            print(f"Changelog:\n{changelog}")
+        url       = data["assets"][0]["browser_download_url"]
+        changelog = data.get("body", "")
+        return remote, url, changelog
 
-            # Download the new executable
-            r = requests.get(download_url)
-            with open(UPDATE_EXE_PATH, "wb") as f:
-                f.write(r.content)
-
-            # Launch updater to replace and relaunch; resource_path handles frozen exe
-            updater_path = resource_path("updater.exe")
-            subprocess.Popen([updater_path, UPDATE_EXE_PATH, sys.argv[0]], close_fds=True)
-
-            # Gracefully shut down the Tkinter GUI if running
-            try:
-                if 'main_root' in globals() and main_root:
-                    main_root.destroy()
-            except Exception:
-                pass
-
-            # Force exit immediately (bypassing any cleanup that might hang)
-            os._exit(0)
-        else:
-            print("You're up to date.")
     except Exception as e:
-        print(f"Update check failed: {e}")
+        mb.showerror("Update Error", f"Failed to check for updates:\n{e}")
+        return None
+
+def perform_update(download_url):
+    """
+    Download the new exe, launch updater, and exit this app.
+    """
+    new_exe = "update_new.exe"
+    try:
+        r = requests.get(download_url)
+        r.raise_for_status()
+        with open(new_exe, "wb") as f:
+            f.write(r.content)
+    except Exception as e:
+        mb.showerror("Update Error", f"Download failed:\n{e}")
+        return
+
+    updater = resource_path("updater.exe")
+    subprocess.Popen([updater, new_exe, sys.argv[0]], close_fds=True)
+    # Close UI then force-exit
+    try:
+        if 'main_root' in globals() and main_root:
+            main_root.destroy()
+    except:
+        pass
+    os._exit(0)
+
+def on_update_click():
+    """
+    Handler for the Update button: query, prompt, then perform.
+    """
+    info = query_update()
+    if info is None:
+        mb.showinfo("No Update", "You’re already on the latest version.")
+        return
+
+    remote, url, changelog = info
+    msg = f"Version {remote} is available.\n\nChangelog:\n{changelog}\n\nInstall now?"
+    if mb.askyesno("Update Available", msg):
+        perform_update(url)
 
 
 
@@ -767,7 +789,15 @@ def open_mic_selection():
     tk.Button(win, text="Apply", command=apply_changes).pack(pady=10)
 
 def on_update_click():
-    threading.Thread(target=check_for_update, daemon=True).start()
+    info = query_update()
+    if not info:
+        mb.showinfo("No Update", "You’re already on the latest version!")
+        return
+
+    remote, url, changelog = info
+    if mb.askyesno("Update Available",
+                   f"Version {remote} is available.\n\nChangelog:\n{changelog}\n\nInstall now?"):
+        perform_update(url)
 
 
 def build_ui():
@@ -909,7 +939,7 @@ def build_ui():
     button_frame.pack(side=tk.BOTTOM, fill=tk.X, pady=5)
     tk.Button(button_frame, text="Start", command=start_listening, width=10).pack(side=tk.LEFT, padx=5)
     tk.Button(button_frame, text="Stop",  command=stop_listening,  width=10).pack(side=tk.LEFT, padx=5)
-    tk.Button(button_frame, text="Update", command=check_for_update, width=10).pack(side=tk.LEFT, padx=5)
+    tk.Button(button_frame, text="Update", command=on_update_click, width=10).pack(side=tk.LEFT, padx=5)
     gear = tk.Button(root, text="⚙️", command=open_mic_selection, width=4)
     gear.place(relx=1.0, x=-10, y=10, anchor="ne")
 
