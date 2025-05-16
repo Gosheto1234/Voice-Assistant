@@ -958,8 +958,14 @@ def build_ui():
 
 
 if __name__ == "__main__":
-    # 1) First, perform update check and potentially exit
-    check_for_update()
+    # 1) First, optionally check for updates on startup
+    #    (uses the same query/perform logic as the Update button)
+    info = query_update()
+    if info:
+        remote, url, changelog = info
+        if mb.askyesno("Update Available",
+                       f"Version {remote} is available.\n\nChangelog:\n{changelog}\n\nInstall now?"):
+            perform_update(url)
 
     # 2) Now, if we just came through an update, let the user know
     if os.path.exists("just_updated.flag"):
