@@ -160,41 +160,51 @@ def query_update():
     if version_tuple(remote) <= version_tuple(local):
         return None
 
-    # find the exe asset
+    # find the VoiceAssistant.exe asset
     download_url = None
     for asset in data["assets"]:
         if asset["name"].lower() == "voiceassistant.exe":
             download_url = asset["browser_download_url"]
             break
+
     if not download_url:
-        mb.showerror("Update Error", "Could not find VoiceAssistant.exe asset on GitHub.")
+        mb.showerror("Update Error", "Could not find VoiceAssistant.exe on GitHub.")
         return None
 
     changelog = data.get("body", "")
     return remote, download_url, changelog
 
+
 def perform_update(download_url):
-    new_exe = "VoiceAssistant_new.exe"
+    """
+    1) Download the new exe as a temp file.
+    2) Launch updater.exe to delete the old exe, move the new one into place,
+       and restart the app.
+    """
+    temp_name = "VoiceAssistant_new.exe"
     try:
-        r = requests.get(download_url); r.raise_for_status()
-        with open(new_exe, "wb") as f:
+        r = requests.get(download_url)
+        r.raise_for_status()
+        with open(temp_name, "wb") as f:
             f.write(r.content)
     except Exception as e:
         mb.showerror("Update Error", f"Download failed:\n{e}")
         return
 
-    # launcher stub (already bundled in your folder)
+    # locate the updater stub shipped alongside your main exe
     updater_path = resource_path("updater.exe")
     if not os.path.exists(updater_path):
         mb.showerror("Update Error", f"Cannot find updater.exe at:\n{updater_path}")
         return
 
-    # tell the updater to swap in the new VoiceAssistant exe
-    subprocess.Popen([updater_path, new_exe, sys.argv[0]], close_fds=True)
+    # call updater.exe <new> <old>
+    old_exe = sys.argv[0]
+    subprocess.Popen([updater_path, temp_name, old_exe], close_fds=True)
 
-    # shut down this UI
+    # tear down this instance
     try:
-        if main_root: main_root.destroy()
+        if main_root:
+            main_root.destroy()
     except:
         pass
     os._exit(0)
