@@ -57,8 +57,8 @@ jobs:
         shell: pwsh
 
       - name: Build executable
-        run: pyinstaller --onefile --windowed --icon=icon.ico --name VoiceAssistant.exe --add-data "annoying_dog.gif;." voice_assistant_new_ui.py
-
+        run: pyinstaller --onefile --clean --noupx updater.py && pyinstaller --onefile --windowed --icon=icon.ico --name VoiceAssistant.exe --add-data "annoying_dog.gif;." --add-binary "dist/updater.exe;." voice_assistant_new_ui.py
+        shell: pwsh
 
       - name: Create GitHub Release
         id: create_release
