@@ -26,6 +26,8 @@ import win32con
 import win32process
 import difflib
 import zipfile
+import tkinter as tk
+import tkinter.messagebox as mb
 
 
 # ——— Configuration & Globals ———
@@ -138,33 +140,47 @@ def check_for_update():
     GITHUB_API_LATEST_RELEASE = "https://api.github.com/repos/Gosheto1234/Voice-Assistant/releases/latest"
     UPDATE_EXE_PATH = "update_new.exe"
 
-
     try:
         print("Checking for updates...")
         response = requests.get(GITHUB_API_LATEST_RELEASE)
         response.raise_for_status()
         data = response.json()
 
-        remote_version = data.get("tag_name")
-        download_url = data["assets"][0]["browser_download_url"]
-        changelog = data.get("body", "")
+        # Strip leading 'v' if present
+        remote_version = data.get("tag_name", "0.0.0").lstrip("v")
+        download_url   = data["assets"][0]["browser_download_url"]
+        changelog      = data.get("body", "")
 
         local_version = get_local_version()
+        print(f"Local version: {local_version}, Remote version: {remote_version}")
 
         if version_tuple(remote_version) > version_tuple(local_version):
             print(f"New version {remote_version} available!")
             print(f"Changelog:\n{changelog}")
 
+            # Download the new executable
             r = requests.get(download_url)
             with open(UPDATE_EXE_PATH, "wb") as f:
                 f.write(r.content)
 
-            subprocess.Popen(["updater.exe", UPDATE_EXE_PATH, sys.argv[0]])
-            sys.exit(0)
+            # Launch updater to replace and relaunch; resource_path handles frozen exe
+            updater_path = resource_path("updater.exe")
+            subprocess.Popen([updater_path, UPDATE_EXE_PATH, sys.argv[0]], close_fds=True)
+
+            # Gracefully shut down the Tkinter GUI if running
+            try:
+                if 'main_root' in globals() and main_root:
+                    main_root.destroy()
+            except Exception:
+                pass
+
+            # Force exit immediately (bypassing any cleanup that might hang)
+            os._exit(0)
         else:
             print("You're up to date.")
     except Exception as e:
         print(f"Update check failed: {e}")
+
 
 
 def resource_path(relative_path):
@@ -823,6 +839,8 @@ def build_ui():
 
     # Start UI
     main_root = tk.Tk()
+    version_label = tk.Label(main_root, text=f"Version: {__version__}", bg="black", fg="white")
+    version_label.place(relx=1.0, rely=0.0, anchor="ne", x=-10, y=10)
     root = main_root
     root.title("Voice Assistant")
     root.geometry("400x300")
@@ -882,7 +900,17 @@ def build_ui():
 
 
 if __name__ == "__main__":
+    # 1) First, perform update check and potentially exit
     check_for_update()
+
+    # 2) Now, if we just came through an update, let the user know
+    if os.path.exists("just_updated.flag"):
+        try:
+            mb.showinfo("Updated", f"Application updated to {__version__}!")
+        finally:
+            os.remove("just_updated.flag")
+
+    # 3) Build and run the UI
     app = build_ui()
     if app:
         app.mainloop()
