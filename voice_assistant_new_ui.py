@@ -192,7 +192,10 @@ def perform_update(download_url):
         mb.showerror("Update Error", f"Download failed:\n{e}")
         return
 
-    updater = resource_path("updater.exe")
+    updater = os.path.join(os.path.dirname(sys.executable), "updater.exe")
+    if not os.path.exists(updater):
+        mb.showerror("Update Error", f"Cannot find updater.exe at:\n{updater}")
+        return     
     subprocess.Popen([updater, new_exe, sys.argv[0]], close_fds=True)
     # Close UI then force-exit
     try:
