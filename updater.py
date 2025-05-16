@@ -1,43 +1,36 @@
-import sys
-import os
-import shutil
-import time
-import subprocess
+import sys, os, shutil, time, subprocess
 
 def main():
     if len(sys.argv) != 3:
-        print("Usage: updater.exe <new_file.exe> <old_file.exe>")
+        print("Usage: updater.exe <new_file> <old_file>")
         time.sleep(3)
         return
 
-    updater = sys.argv[1]
-    old_file = sys.argv[2]
-
+    new_file, old_file = sys.argv[1], sys.argv[2]
     print(f"Replacing {old_file} with {new_file}")
 
-    try:
-        time.sleep(2)  # Let the old process fully exit
+    # give the original process a moment to fully exit
+    time.sleep(2)
 
-        # Optional: Rename old file before replacement
-        backup = old_file + ".bak"
-        if os.path.exists(backup):
-            os.remove(backup)
-        os.rename(old_file, backup)
+    # backup & remove the old exe
+    bak = old_file + ".bak"
+    if os.path.exists(bak):
+        os.remove(bak)
+    os.rename(old_file, bak)
 
-        # Move new file into place
-        shutil.move(new_file, old_file)
-        with open("just_updated.flag", "w") as f:
-            f.write(new_file)  # or the new version tag
-        print("Replacement done.")
+    # move the new exe into place
+    shutil.move(new_file, old_file)
 
-        # Relaunch the updated app
-        updater_exe = sys.executable
-        subprocess.Popen([old_file], close_fds=True)
-        print("App restarted.")
+    # clean up backup if you want, or leave it around
+    os.remove(bak)
 
-    except Exception as e:
-        print(f"Update failed: {e}")
-        time.sleep(5)
+    # signal the main app that we just updated
+    with open("just_updated.flag", "w") as f:
+        f.write("updated")
+
+    # restart the updated app
+    subprocess.Popen([old_file], close_fds=True)
+    print("App restarted.")
 
 if __name__ == "__main__":
     main()
