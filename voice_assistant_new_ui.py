@@ -586,7 +586,19 @@ def execute_command(text):
         else:
             show_feedback("Song not found.")
         return
-
+    if cmd[0] == "play" and cmd[1] == "file":
+        song_query = " ".join(cmd[2:]).lower()
+        match = None
+        for name, path in music_db.items():
+            if song_query in name:
+                match = path
+                break
+        if match:
+            os.startfile(match)
+            show_feedback(f"Playing: {os.path.basename(match)}")
+        else:
+            show_feedback("Song not found.")
+        return
     # ——— Media control ———
     for action, keywords in media_map.items():
         if any(k in lower for k in keywords):
