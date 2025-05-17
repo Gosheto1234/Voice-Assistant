@@ -709,32 +709,42 @@ def execute_command(text):
 
 # ——— Listening ———
 def listen_once():
-    idx=selected_mic.get()
-    ui_log(f"Mic idx {idx}","debug")
+    global is_processing
+
+    if is_processing:
+        return
+    is_processing = True
+
+    idx = selected_mic.get()
+    ui_log(f"Mic idx {idx}", "debug")
     if idx < 0 or idx >= len(microphones):
         ui_log("Invalid mic index", "error")
+        is_processing = False
         return
+
     try:
         with sr.Microphone(device_index=idx) as src:
             recognizer.adjust_for_ambient_noise(src, 0.5)
-            ui_log("Listening…","debug")
+            ui_log("Listening…", "debug")
             audio = recognizer.listen(src, timeout=2, phrase_time_limit=10)
-    except Exception as e:
-        ui_log(f"Mic error:{e}","error")
-        return
-    try:
         txt = recognizer.recognize_google(audio, language="bg-BG")
         ui_log(f"Heard: {txt}", "info")
-        show_feedback(f"Processing: {txt}")  
+
+        show_feedback(f"Processing: {txt}")
         result = execute_command(txt)
         show_feedback(result)
-        execute_command(txt)
+
     except sr.UnknownValueError:
         ui_log("No understand", "warning")
         show_feedback("…")
     except sr.RequestError as e:
         ui_log(f"Rec error:{e}", "error")
         show_feedback("Error")
+    except Exception as e:
+        ui_log(f"Unexpected error:{e}", "error")
+    finally:
+        is_processing = False
+
 
 def listen_loop():
     global keep_listening
