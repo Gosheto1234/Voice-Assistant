@@ -548,17 +548,27 @@ discord_map = {
 # Helper function to check if Spotify (or another player) is running
 def get_current_player():
     """
-    Detect a running media player process from media_players.json,
-    or any known process name or window title.
-    Returns (name, info, hwnd) or None.
+    Return (name, exe_path, hwnd) for the first running known player,
+    falling back to UWP Media Player if its window title is visible.
     """
-    # 1) First, check your configured media_players.json
+    # 1) look in your configured JSON for known players:
     for name, info in media_players.items():
         exe = info["exe"].lower()
-        for proc in psutil.process_iter(["name"]):
-            if proc.info["name"].lower() == exe:
+        for proc in psutil.process_iter(["exe", "name"]):
+            # proc.info["exe"] is full path when available
+            if proc.info.get("exe", "").lower().endswith(exe):
                 hwnd = find_app_window(name)
-                return name, info, hwnd
+                return name, proc.info["exe"], hwnd
+
+    # 2) fallback: look for UWP-style Media Player by window title
+    hwnd = find_media_player_via_title()
+    if hwnd:
+        # You can ship a .lnk to the Music UWP app in apps_db under key "media player"
+        mp = apps_db.get("media player")
+        return "Media Player", mp, hwnd
+
+    return None, None, None
+
 
     # 2) Then look for common generic players by window title
     generic_titles = ["media player", "vlc media player", "winamp", "spotify"]
@@ -618,41 +628,45 @@ def execute_command(text):
 
     # ——— Play File ———
     if cmd[0] == "play" and len(cmd) > 1:
-        # if user said “play Big Pencil” or “play file Big Pencil”
-        # we’ll accept either “play file foo” or just “play foo”
-        if cmd[1] == "file":
-            song_query = " ".join(cmd[2:]).lower()
-        else:
-            song_query = " ".join(cmd[1:]).lower()
+    # accept either “play file foo” or “play foo”
+    if cmd[1] == "file":
+        song_query = " ".join(cmd[2:]).lower()
+    else:
+        song_query = " ".join(cmd[1:]).lower()
 
-        # build list of available songs
-        names = list(music_db.keys())
-        match = music_db.get(song_query)
+    names = list(music_db.keys())
+    match = music_db.get(song_query)
+    if not match:
+        close = difflib.get_close_matches(song_query, names, n=1, cutoff=0.6)
+        if close:
+            match = music_db[close[0]]
 
-        # try fuzzy match if exact lookup fails
-        if not match:
-            close = difflib.get_close_matches(song_query, names, n=1, cutoff=0.6)
-            if close:
-                match = music_db[close[0]]
-
-        if match:
-            try:
-                # if there's already a player open, focus it
-                player = get_current_player()
-                if player:
-                    _, _, hwnd = player
-                    if hwnd:
-                        activate_window(hwnd)
-                        time.sleep(0.1)
-                # now actually launch the file
-                os.startfile(match)
-                show_feedback(f"Playing: {os.path.basename(match)}")
-            except Exception as e:
-                ui_log(f"Play file failed: {e}", "error")
-                show_feedback("Failed to play file")
-        else:
-            show_feedback("Song not found.")
+    if not match:
+        show_feedback("Song not found.")
         return
+
+    try:
+        # detect which player to use
+        pname, exe_path, hwnd = get_current_player()
+
+        if exe_path:
+            # focus the running player
+            if hwnd:
+                activate_window(hwnd)
+                time.sleep(0.1)
+            # launch the file with that player's exe
+            subprocess.Popen([exe_path, match], close_fds=True)
+        else:
+            # no player running, just open default
+            os.startfile(match)
+
+        show_feedback(f"Playing: {os.path.basename(match)}")
+
+    except Exception as e:
+        ui_log(f"Play file failed: {e}", "error")
+        show_feedback("Failed to play file")
+
+    return
     # ——— Media control ———
     for action, keywords in media_map.items():
         if any(k in lower for k in keywords):
