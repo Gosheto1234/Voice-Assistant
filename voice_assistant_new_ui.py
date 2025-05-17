@@ -548,36 +548,38 @@ discord_map = {
 # Helper function to check if Spotify (or another player) is running
 def get_current_player():
     """
-    Try process-based detection first (using media_players.json → exe),
-    then fall back to window-title search for UWP Media Player.
+    Detect a running media player process from media_players.json,
+    or any known process name or window title.
     Returns (name, info, hwnd) or None.
     """
-    # 1) check known exes
+    # 1) First, check your configured media_players.json
     for name, info in media_players.items():
         exe = info["exe"].lower()
         for proc in psutil.process_iter(["name"]):
             if proc.info["name"].lower() == exe:
-                # find its window
-                hwnd = find_app_window(name) or None
+                hwnd = find_app_window(name)
                 return name, info, hwnd
 
-    # 2) fallback for UWP-style “Media Player”
-    hwnd = find_media_player_via_title()
-    if hwnd:
-        # look up its info from the JSON config
-        info = media_players.get("Media Player")
-        if info:
-            return "Media Player (UWP)", info, hwnd
+    # 2) Then look for common generic players by window title
+    generic_titles = ["media player", "vlc media player", "winamp", "spotify"]
+    hwnds = []
+    def _cb(hwnd, _):
+        if win32gui.IsWindowVisible(hwnd):
+            title = win32gui.GetWindowText(hwnd).lower()
+            for t in generic_titles:
+                if t in title:
+                    hwnds.append(hwnd)
+    win32gui.EnumWindows(_cb, None)
+    if hwnds:
+        hwnd = hwnds[0]
+        # Figure out which one it is for your media_players.json
+        for name, info in media_players.items():
+            if info["exe"].lower() in gw.getWindowTitle(hwnd).lower():
+                return name, info, hwnd
+        # fallback stub
+        return "Generic Media Player", {"exe": "", "keys": {}}, hwnd
+
     return None
-
-def ensure_player_running(player_name, exe):
-    """Launch the player if it’s installed but not running."""
-    if not any(p.name().lower() == exe.lower() for p in psutil.process_iter()):
-        path = apps_db.get(player_name.lower())
-        if path:
-            os.startfile(path)
-            time.sleep(2)  # give it a moment to spin up
-
 # Function to control the media player (for example, Spotify or VLC)
 def send_media_action(key):
     try:
@@ -616,31 +618,37 @@ def execute_command(text):
 
     # ——— Play File ———
     if cmd[0] == "play" and cmd[1] == "file":
-        song_query = " ".join(cmd[2:]).lower()
-        match = None
-        for name, path in music_db.items():
-            if song_query in name:
-                match = path
-                break
-        if match:
-            os.startfile(match)
+    song_query = " ".join(cmd[2:]).lower()
+
+    # 1) Direct match or fuzzy lookup in music_db
+    names = list(music_db.keys())
+    match = music_db.get(song_query)
+    if not match:
+        # try fuzzy
+        close = difflib.get_close_matches(song_query, names, n=1, cutoff=0.6)
+        if close:
+            match = music_db[close[0]]
+
+    if match:
+        try:
+            # 2) If we know a media player, launch/focus it first
+            player = get_current_player()
+            if player:
+                name, info, hwnd = player
+                if hwnd:
+                    activate_window(hwnd)
+                    time.sleep(0.1)
+                os.startfile(match)  # send file to that player
+            else:
+                # no known player, just open with default app
+                os.startfile(match)
             show_feedback(f"Playing: {os.path.basename(match)}")
-        else:
-            show_feedback("Song not found.")
-        return
-    if cmd[0] == "play" and cmd[1] == "file":
-        song_query = " ".join(cmd[2:]).lower()
-        match = None
-        for name, path in music_db.items():
-            if song_query in name:
-                match = path
-                break
-        if match:
-            os.startfile(match)
-            show_feedback(f"Playing: {os.path.basename(match)}")
-        else:
-            show_feedback("Song not found.")
-        return
+        except Exception as e:
+            ui_log(f"Play file failed: {e}", "error")
+            show_feedback("Failed to play file")
+    else:
+        show_feedback("Song not found.")
+    return
     # ——— Media control ———
     for action, keywords in media_map.items():
         if any(k in lower for k in keywords):
@@ -649,12 +657,15 @@ def execute_command(text):
 
             # 2) If none running, pick the first installed and launch it
             if not current:
-                try:
-                    player_name, info = next(iter(media_players.items()))
-                    ensure_player_running(player_name, info["exe"])
-                    current = (player_name, info)
-                except StopIteration:
-                    current = None
+            if "vlc" in apps_db:
+                subprocess.Popen(apps_db["vlc"], shell=True)
+                time.sleep(2)
+                current = get_current_player()
+            elif media_players:
+                # fallback: first configured player
+                pname, info = next(iter(media_players.items()))
+                ensure_player_running(pname, info["exe"])
+                current = get_current_player()
 
             # 3) Still none? bail out
             if not current:
