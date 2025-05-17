@@ -147,3 +147,4 @@ if __name__ == '__main__':
     music_db = {}  # TODO: build music DB
     app = build_ui()
     app.mainloop()
+
