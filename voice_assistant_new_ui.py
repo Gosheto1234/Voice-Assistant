@@ -28,6 +28,7 @@ import re
 
 
 
+
 import tkinter as tk
 from tkinter import ttk, scrolledtext, Toplevel, PanedWindow
 
@@ -43,6 +44,9 @@ import difflib
 import zipfile
 import tkinter as tk
 import tkinter.messagebox as mb
+from winrt.windows.media.control import GlobalSystemMediaTransportControlsSessionManager
+import asyncio
+import nest_asyncio
 
 
 # ——— Configuration & Globals ———
@@ -148,7 +152,45 @@ def build_music_db():
             name = os.path.splitext(os.path.basename(path))[0].lower()
             db[name] = path
     return db
-    
+
+
+
+async def _get_current_session():
+    mgr = await GlobalSystemMediaTransportControlsSessionManager.request_async()
+    return mgr.get_current_session()
+
+async def smtc_play():
+    session = await _get_current_session()
+    if session:
+        controls = session.try_get_media_transport_controls()
+        await controls.play_async()
+
+async def smtc_pause():
+    session = await _get_current_session()
+    if session:
+        controls = session.try_get_media_transport_controls()
+        await controls.pause_async()
+
+async def smtc_next():
+    session = await _get_current_session()
+    if session:
+        controls = session.try_get_media_transport_controls()
+        await controls.next_async()
+
+async def smtc_prev():
+    session = await _get_current_session()
+    if session:
+        controls = session.try_get_media_transport_controls()
+        await controls.previous_async()
+
+
+def send_smtc_command(coro):
+    try:
+        asyncio.run(coro)
+    except RuntimeError:
+        # in case the loop is already running
+        import nest_asyncio; nest_asyncio.apply()
+        asyncio.get_event_loop().run_until_complete(coro)   
 
 #App update check
 
@@ -616,82 +658,49 @@ def execute_command(text):
                 show_feedback(f"Затворих: {' '.join(args)}")
             return
 
-    # ——— Play File ———
+       # ——— Play File ———
     if cmd[0] == "play" and cmd[1] == "file":
         song_query = " ".join(cmd[2:]).lower()
-    
 
-    # 1) Direct match or fuzzy lookup in music_db
-    names = list(music_db.keys())
-    match = music_db.get(song_query)
-    if not match:
-        # try fuzzy
-        close = difflib.get_close_matches(song_query, names, n=1, cutoff=0.6)
-        if close:
-            match = music_db[close[0]]
+        # 1) Direct match or fuzzy lookup in music_db
+        names = list(music_db.keys())
+        match = music_db.get(song_query)
+        if not match:
+            close = difflib.get_close_matches(song_query, names, n=1, cutoff=0.6)
+            if close:
+                match = music_db[close[0]]
 
-    if match:
-        try:
-            # 2) If we know a media player, launch/focus it first
-            player = get_current_player()
-            if player:
-                name, info, hwnd = player
-                if hwnd:
-                    activate_window(hwnd)
-                    time.sleep(0.1)
-                os.startfile(match)  # send file to that player
-            else:
-                # no known player, just open with default app
-                os.startfile(match)
-            show_feedback(f"Playing: {os.path.basename(match)}")
-        except Exception as e:
-            ui_log(f"Play file failed: {e}", "error")
-            show_feedback("Failed to play file")
-    else:
-        show_feedback("Song not found.")
-    return
-    # ——— Media control ———
-    for action, keywords in media_map.items():
-        if any(k in lower for k in keywords):
-            # 1) See if any known player is already running
-            current = get_current_player()
-
-            # 2) If none running, try the built-in UWP Media Player first
-            if not current:
-                # look up “Media Player” in your apps_db (should point to its .exe or .lnk)
-                mp_path = apps_db.get("media player")
-                if mp_path:
-                    try:
-                        os.startfile(mp_path)
-                        time.sleep(2)
-                        current = get_current_player()
-                    except Exception as e:
-                        ui_log(f"Failed launching Media Player: {e}", "error")
-
-            # 3) Still none? fall back to first JSON-configured player
-            if not current and media_players:
-                pname, info = next(iter(media_players.items()))
-                ensure_player_running(pname, info["exe"])
-                current = get_current_player()
-
-            # 4) If we have a player now, send the hotkey
-            if current:
-                name, info, hwnd = current
-                key = info["keys"].get(action)
-                if key:
+        if match:
+            try:
+                player = get_current_player()
+                if player:
+                    name, info, hwnd = player
                     if hwnd:
                         activate_window(hwnd)
                         time.sleep(0.1)
-                    show_feedback(f"{name}: {action}")
-                    return
+                    os.startfile(match)
                 else:
-                    ui_log(f"No key mapping for {action} in {name}", "warning")
-                    show_feedback(f"{name} не поддържа {action}")
-                    return
+                    os.startfile(match)
+                show_feedback(f"Playing: {os.path.basename(match)}")
+            except Exception as e:
+                ui_log(f"Play file failed: {e}", "error")
+                show_feedback("Failed to play file")
+        else:
+            show_feedback("Song not found.")
+        # <-- **NO RETURN** here, so the SMTC block can run
 
-            # 5) No player at all → bail
-            ui_log("No media player found", "warning")
-            show_feedback("Няма медия плейър")
+    # ——— SMTC Media control ———
+    for action, keywords in media_map.items():
+        if any(k in lower for k in keywords):
+            if action == "play":
+                send_smtc_command(smtc_play())
+            elif action == "pause":
+                send_smtc_command(smtc_pause())
+            elif action == "next":
+                send_smtc_command(smtc_next())
+            elif action == "previous":
+                send_smtc_command(smtc_prev())
+            show_feedback(f"Media: {action}")
             return
 
     # ——— Discord voice control ———
@@ -712,8 +721,6 @@ def execute_command(text):
     # ——— Fallback ———
     ui_log(f"No action for: {text}", "warning")
     show_feedback("Няма действие")
-
-
 
 # ——— Listening ———
 def listen_once():
