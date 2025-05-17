@@ -602,6 +602,7 @@ def send_media_action(key):
 # ——— Core Execution ———
 def execute_command(text):
     show_feedback(f"Processing: {text}")
+    ui_log(f"execute_command: text={text}", "debug")
     lower = text.lower()
     cmd = lower.split()
 
@@ -610,6 +611,7 @@ def execute_command(text):
 
     # ——— Relearn apps ———
     if cmd[0] in ("learn", "learn apps"):
+        ui_log("Branch: relearn apps", "debug")
         learn_apps()
         show_feedback("Apps relearned")
         return
@@ -617,22 +619,25 @@ def execute_command(text):
     # ——— Open / Close Application ———
     for action, keywords in command_map.items():
         if cmd[0] in keywords:
+            ui_log(f"Branch: {action} app", "debug")
             args = cmd[1:]
             if action == "open":
                 handle_open(args)
                 show_feedback(f"Отворих: {' '.join(args)}")
-            elif action == "close":
+            else:
                 handle_close(args)
                 show_feedback(f"Затворих: {' '.join(args)}")
             return
 
     # ——— Play File ———
     if cmd[0] == "play" and len(cmd) > 1:
+        ui_log("Branch: play file", "debug")
         # accept either “play file foo” or “play foo”
         if cmd[1] == "file":
             song_query = " ".join(cmd[2:]).lower()
         else:
             song_query = " ".join(cmd[1:]).lower()
+        ui_log(f"Play‐file query: {song_query}", "debug")
 
         names = list(music_db.keys())
         match = music_db.get(song_query)
@@ -640,14 +645,17 @@ def execute_command(text):
             close = difflib.get_close_matches(song_query, names, n=1, cutoff=0.6)
             if close:
                 match = music_db[close[0]]
+                ui_log(f"Fuzzy matched: {close[0]}", "debug")
 
         if not match:
+            ui_log("No matching song found", "warning")
             show_feedback("Song not found.")
             return
 
         try:
             # detect which player to use
             pname, exe_path, hwnd = get_current_player()
+            ui_log(f"Using player: {pname}, exe={exe_path}", "debug")
 
             if exe_path:
                 # focus the running player
@@ -661,12 +669,73 @@ def execute_command(text):
                 os.startfile(match)
 
             show_feedback(f"Playing: {os.path.basename(match)}")
-
         except Exception as e:
             ui_log(f"Play file failed: {e}", "error")
             show_feedback("Failed to play file")
-
         return
+
+    # ——— Media control ———
+    for action, keywords in media_map.items():
+        if any(k in lower for k in keywords):
+            ui_log(f"Branch: media control '{action}'", "debug")
+            # 1) See if any known player is already running
+            current = get_current_player()
+
+            # 2) If none running, try the built-in UWP Media Player first
+            if not current:
+                mp_path = apps_db.get("media player")
+                if mp_path:
+                    try:
+                        os.startfile(mp_path)
+                        time.sleep(2)
+                        current = get_current_player()
+                        ui_log("Launched built-in Media Player", "debug")
+                    except Exception as e:
+                        ui_log(f"Failed launching Media Player: {e}", "error")
+
+            # 3) Still none? fall back to first JSON-configured player
+            if not current and media_players:
+                pname, info = next(iter(media_players.items()))
+                ensure_player_running(pname, info["exe"])
+                current = get_current_player()
+
+            # 4) If we have a player now, send the hotkey
+            if current:
+                name, info, hwnd = current
+                key = info["keys"].get(action)
+                if key:
+                    if hwnd:
+                        activate_window(hwnd)
+                        time.sleep(0.1)
+                    send_media_action(key)
+                    show_feedback(f"{name}: {action}")
+                else:
+                    ui_log(f"No key mapping for {action} in {name}", "warning")
+                    show_feedback(f"{name} не поддържа {action}")
+                return
+
+            # 5) No player at all → bail
+            ui_log("No media player found", "warning")
+            show_feedback("Няма медия плейър")
+            return
+
+    # ——— Discord voice control ———
+    for action, keywords in discord_map.items():
+        if any(k in lower for k in keywords):
+            ui_log(f"Branch: discord control '{action}'", "debug")
+            if not focus_app_window("discord"):
+                ui_log("Discord not running or not found", "warning")
+                show_feedback("Discord не е отворен")
+                return
+            hotkey = ("ctrl", "shift", "m") if action in ("mute", "unmute") else ("ctrl", "shift", "d")
+            pyautogui.hotkey(*hotkey)
+            ui_log(f"Discord: {action}", "info")
+            show_feedback(f"Discord: {action}")
+            return
+
+    # ——— Fallback ———
+    ui_log(f"No action for: {text}", "warning")
+    show_feedback("Няма действие")
     # ——— Media control ———
     for action, keywords in media_map.items():
         if any(k in lower for k in keywords):
