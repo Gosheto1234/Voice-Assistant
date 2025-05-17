@@ -54,6 +54,7 @@ SELECTED_THEME_PATH = os.path.join(os.path.dirname(__file__), "selected_theme.js
 MEDIA_CFG_PATH = os.path.join(os.path.dirname(__file__), "media_players.json")
 USER_DESKTOP    = os.path.join(os.path.expanduser("~"), "Desktop")
 MUSIC_EXTENSIONS = ('.mp3', '.flac', '.wav', '.aac', '.ogg', '.m4a')
+media_players = {'vlc': {'exe': 'vlc.exe', 'keys': {'play': 'space', 'pause': 'space', 'next': 'n', 'previous': 'p'}},}
 
 recognizer = sr.Recognizer()
 microphones = []
@@ -142,6 +143,45 @@ def build_music_db():
         for path in glob.glob(os.path.join(USER_DESKTOP, '**', f'*{ext}'), recursive=True):
             db[os.path.splitext(os.path.basename(path))[0].lower()] = path
     return db
+
+
+
+# —— Consolidated Media + Discord Helpers —— 
+
+# Example media_players config (customize as needed)
+media_players = {
+    'vlc': {'exe': 'vlc.exe', 'keys': {
+        'play': 'space', 'pause': 'space',
+        'next': 'n', 'previous': 'p'
+    }},
+    # …add other players here…
+}
+
+discord_hotkeys = {
+    'mute':   ('ctrl','shift','m'),
+    'unmute': ('ctrl','shift','m'),
+    'deafen': ('ctrl','shift','d'),
+    'undeafen':('ctrl','shift','d'),
+}
+
+media_map = {
+    'play':     ['play','start','resume'],
+    'pause':    ['pause','stop'],
+    'next':     ['next','skip'],
+    'previous': ['previous','prev'],
+}
+
+discord_map = {
+    'mute':    ['mute'],
+    'unmute':  ['unmute'],
+    'deafen':  ['deafen'],
+    'undeafen':['undeafen'],
+}
+music_db = {
+    os.path.splitext(f.lower())[0]: os.path.join(dp,f)
+    for dp, dn, files in os.walk(USER_DESKTOP)
+    for f in files if f.lower().endswith(MUSIC_EXTENSIONS)
+}
     
 
 #App update check
@@ -249,20 +289,18 @@ def resource_path(relative_path):
 
 
 # ——— Win32 Helpers for Enumerating & Activating Windows ———
-def find_app_window(app_name):
-    """Return the HWND of a top-level window whose process name contains app_name."""
-    windows = []
-    def enum_callback(hwnd, _):
-        if win32gui.IsWindowVisible(hwnd) or win32gui.IsIconic(hwnd):
-            tid, pid = win32process.GetWindowThreadProcessId(hwnd)
+def find_app_window(proc_name):
+    hwnds=[]
+    def cb(hwnd,_):
+        if win32gui.IsWindowVisible(hwnd):
+            tid,pid=win32process.GetWindowThreadProcessId(hwnd)
             try:
-                proc = psutil.Process(pid)
-                if app_name.lower() in proc.name().lower():
-                    windows.append(hwnd)
-            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                if proc_name.lower() in psutil.Process(pid).name().lower():
+                    hwnds.append(hwnd)
+            except:
                 pass
-    win32gui.EnumWindows(enum_callback, None)
-    return windows[0] if windows else None
+    win32gui.EnumWindows(cb,None)
+    return hwnds[0] if hwnds else None
 
 def activate_window(hwnd):
     """Maximize (if needed) and bring the given HWND to the foreground."""
@@ -285,33 +323,7 @@ def find_media_player_via_title():
     win32gui.EnumWindows(cb,None)
     return hwnds[0] if hwnds else None
 
-# ——— Media Control Helpers ———
-def get_current_player():
-    # 1) JSON exes
-    for name, info in media_players.items():
-        exe=info["exe"].lower()
-        for proc in psutil.process_iter(["name"]):
-            if proc.info["name"].lower()==exe:
-                return name, info, find_app_window(name)
-    # 2) UWP fallback
-    hwnd=find_media_player_via_title()
-    if hwnd and "Media Player" in media_players:
-        return "Media Player", media_players["Media Player"], hwnd
-    return None
 
-def ensure_player_running(name, exe):
-    if not any(p.name().lower()==exe.lower() for p in psutil.process_iter()):
-        path=apps_db.get(name.lower())
-        if path:
-            os.startfile(path)
-            time.sleep(2)
-
-def send_media_action(key):
-    try:
-        pyautogui.press(key)
-        ui_log(f"Sent media action: {key}", "info")
-    except Exception as e:
-        ui_log(f"Media action failed: {e}", "error")
 
 # ——— Helpers for Spotify control ———
 def get_spotify_window():
@@ -467,12 +479,95 @@ def send_media(key):
         ui_log(f"Media failed:{e}", "error")
 
 # ——— Window ———
-def focus_app_window(name):
-    hwnd = find_app_window(name)
-    if hwnd and activate_window(hwnd):
+def focus_app(hwnd):
+    if hwnd:
+        win32gui.ShowWindow(hwnd,win32con.SW_RESTORE)
+        win32gui.ShowWindow(hwnd,win32con.SW_MAXIMIZE)
+        win32gui.SetForegroundWindow(hwnd)
         return True
     return False
 
+def get_current_player():
+    for name,info in media_players.items():
+        for proc in psutil.process_iter(['name']):
+            if proc.info['name'].lower()==info['exe'].lower():
+                return name,info,find_app_window(name)
+    return None,None,None
+
+def send_media_action(info,action):
+    key = info['keys'].get(action)
+    if key:
+        pyautogui.press(key)
+        return True
+    return False
+
+
+
+
+def handle_play_file(filename: str) -> str:
+    """Try to find and play a desktop file by name (with fuzzy matching)."""
+    key = filename.lower().strip()
+    path = music_db.get(key)
+    if not path:
+        # Fuzzy‐match if exact name not found
+        close = difflib.get_close_matches(key, music_db.keys(), n=1, cutoff=0.6)
+        if close:
+            path = music_db[close[0]]
+    if path:
+        os.startfile(path)
+        return f"Playing file: {os.path.basename(path)}"
+    return "Song not found."
+
+def handle_media_action(action: str) -> str:
+    """Send a play/pause/next/etc. command to the current media player."""
+    player_name, player_info, hwnd = get_current_player()
+    if not player_info:
+        return "No media player running."
+    focus_app(hwnd)
+    if send_media_action(player_info, action):
+        return f"Media {action} sent to {player_name}"
+    return f"Action {action} not supported by {player_name}"
+
+
+
+def handle_discord(action: str) -> str:
+    """Focus Discord and send the appropriate mute/deafen hotkey."""
+    hwnd = find_app_window('discord')
+    if not hwnd:
+        return "Discord not running."
+    focus_app(hwnd)
+    pyautogui.hotkey(*discord_hotkeys[action])
+    return f"Discord: {action}"
+
+
+def execute_command(text: str) -> str:
+    """
+    Dispatch incoming text to Discord, file‐play, or generic media handlers.
+    Priority order:
+      1) Discord keywords
+      2) 'play <filename>' for desktop files
+      3) Generic media keywords (play/pause/next/etc.)
+    """
+    lower = text.lower().strip()
+
+    # 1) Discord commands
+    for action, keywords in discord_map.items():
+        if any(kw in lower for kw in keywords):
+            return handle_discord(action)
+
+    # 2) Play a desktop file
+    if lower.startswith('play '):
+        filename = lower[len('play '):]
+        return handle_play_file(filename)
+
+    # 3) Other media controls
+    for action, keywords in media_map.items():
+        if any(kw in lower for kw in keywords):
+            return handle_media_action(action)
+
+    return "No action found."
+
+   
 
 
 
@@ -516,7 +611,7 @@ def handle_open(args):
         # 4) If process already running, just focus it
         if is_process_running(name):
             ui_log(f"{name} already running; focusing…", "info")
-            if focus_app_window(name):
+            if focus_app(name):
                 # Special Discord hook
                 if name == "discord":
                     ui_log("Discord focused, ready for mute/deafen commands", "info")
@@ -534,7 +629,7 @@ def handle_open(args):
 
                 # Give the app time to initialize, then focus and maximize
                 time.sleep(2)
-                if focus_app_window(name):
+                if focus_app(name):
                     # Discord hook again
                     if name == "discord":
                         ui_log("Discord focused, ready for mute/deafen commands", "info")
@@ -543,8 +638,20 @@ def handle_open(args):
             except Exception as e:
                 ui_log(f"Open failed: {e}", "error")
 
+
+
+
     # Fire off in background thread so UI stays responsive
     threading.Thread(target=open_thread, daemon=True).start()
+
+def handle_close(args):
+    # e.g. args = ['discord'] or ['vlc']
+    name = " ".join(args).lower()
+    hwnd = find_app_window(name)
+    if hwnd:
+        win32gui.PostMessage(hwnd, win32con.WM_CLOSE, 0, 0)
+        return True
+    return False
 
 
 
@@ -570,87 +677,16 @@ def execute_command(text):
         show_feedback(f"Opened {' '.join(cmd[1:])}")
         return
     if cmd[0] in command_map["close"]:
-        handle_close(cmd[1:])
-        show_feedback(f"Closed {' '.join(cmd[1:])}")
+        success = handle_close(cmd[1:])
+        show_feedback(f"Closed {' '.join(cmd[1:])}" if success else "Could not close that app")
         return
 
-    # — Spotify Control ——
-    # Trigger on prefix "spotify"
-    if cmd[0] == "spotify" and len(cmd) > 1:
-        # find which media action they said
-        action = next((act for act, kws in media_map.items() if any(k in lower for k in kws)), None)
-        if not action:
-            show_feedback("Specify play/pause/next/etc. for Spotify")
-            return
-
-        # ensure Spotify window
-        hwnd = launch_spotify_if_needed()
-        if not hwnd:
-            show_feedback("Could not launch or find Spotify")
-            return
-
-        activate_window(hwnd)
-        time.sleep(0.1)
-
-        # map our abstract actions to Spotify hotkeys
-        spotify_hotkeys = {
-            "play":        ("space",),
-            "pause":       ("space",),
-            "next":        ("ctrl", "right"),
-            "previous":    ("ctrl", "left"),
-            "volume up":   ("ctrl", "up"),
-            "volume down": ("ctrl", "down"),
-        }
-        keys = spotify_hotkeys.get(action)
-        if keys:
-            pyautogui.hotkey(*keys)
-            show_feedback(f"Spotify: {action}")
-        else:
-            show_feedback(f"Spotify does not support {action}")
-        return
-
-    # — Play Desktop File ——
-    if cmd[0] == "play":
-        # if they said "play file X" or just "play X"
-        parts = cmd[1:]
-        if parts and parts[0] == "file":
-            parts = parts[1:]
-        query = " ".join(parts).lower()
-        match = music_db.get(query)
-        if not match:
-            close = difflib.get_close_matches(query, music_db.keys(), n=1, cutoff=0.6)
-            if close:
-                match = music_db[close[0]]
-        if match:
-            os.startfile(match)
-            show_feedback(f"Playing: {os.path.basename(match)}")
-        else:
-            show_feedback("Song not found.")
-        return
-
-    # — Discord Control ——
-    for action, keywords in discord_map.items():
-        if any(k in lower for k in keywords):
-            if focus_app_window("discord"):
-                combo = ("ctrl", "shift", "m") if action in ("mute", "unmute") else ("ctrl", "shift", "d")
-                pyautogui.hotkey(*combo)
-                show_feedback(f"Discord: {action}")
-            else:
-                show_feedback("Discord not running")
-            return
+    
 
     # — Generic Media Control ——
     for action, keywords in media_map.items():
         if any(k in lower for k in keywords):
             pname, info, hwnd = get_current_player()
-            if not pname:
-                # nothing running, try first configured
-                try:
-                    pname, info = next(iter(media_players.items()))
-                    ensure_player_running(pname, info["exe"])
-                    pname, info, hwnd = get_current_player()
-                except StopIteration:
-                    pass
             if pname:
                 if hwnd:
                     activate_window(hwnd)
@@ -689,6 +725,9 @@ def listen_once():
     try:
         txt = recognizer.recognize_google(audio, language="bg-BG")
         ui_log(f"Heard: {txt}", "info")
+        show_feedback(f"Processing: {txt}")  
+        result = execute_command(txt)
+        show_feedback(result)
         execute_command(txt)
     except sr.UnknownValueError:
         ui_log("No understand", "warning")
