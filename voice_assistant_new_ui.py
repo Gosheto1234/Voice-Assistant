@@ -617,39 +617,42 @@ def execute_command(text):
             return
 
     # ——— Play File ———
-    if cmd[0] == "play" and cmd[1] == "file":
-        song_query = " ".join(cmd[2:]).lower()
-    
+    if cmd[0] == "play" and len(cmd) > 1:
+        # if user said “play Big Pencil” or “play file Big Pencil”
+        # we’ll accept either “play file foo” or just “play foo”
+        if cmd[1] == "file":
+            song_query = " ".join(cmd[2:]).lower()
+        else:
+            song_query = " ".join(cmd[1:]).lower()
 
-    # 1) Direct match or fuzzy lookup in music_db
-    names = list(music_db.keys())
-    match = music_db.get(song_query)
-    if not match:
-        # try fuzzy
-        close = difflib.get_close_matches(song_query, names, n=1, cutoff=0.6)
-        if close:
-            match = music_db[close[0]]
+        # build list of available songs
+        names = list(music_db.keys())
+        match = music_db.get(song_query)
 
-    if match:
-        try:
-            # 2) If we know a media player, launch/focus it first
-            player = get_current_player()
-            if player:
-                name, info, hwnd = player
-                if hwnd:
-                    activate_window(hwnd)
-                    time.sleep(0.1)
-                os.startfile(match)  # send file to that player
-            else:
-                # no known player, just open with default app
+        # try fuzzy match if exact lookup fails
+        if not match:
+            close = difflib.get_close_matches(song_query, names, n=1, cutoff=0.6)
+            if close:
+                match = music_db[close[0]]
+
+        if match:
+            try:
+                # if there's already a player open, focus it
+                player = get_current_player()
+                if player:
+                    _, _, hwnd = player
+                    if hwnd:
+                        activate_window(hwnd)
+                        time.sleep(0.1)
+                # now actually launch the file
                 os.startfile(match)
-            show_feedback(f"Playing: {os.path.basename(match)}")
-        except Exception as e:
-            ui_log(f"Play file failed: {e}", "error")
-            show_feedback("Failed to play file")
-    else:
-        show_feedback("Song not found.")
-    return
+                show_feedback(f"Playing: {os.path.basename(match)}")
+            except Exception as e:
+                ui_log(f"Play file failed: {e}", "error")
+                show_feedback("Failed to play file")
+        else:
+            show_feedback("Song not found.")
+        return
     # ——— Media control ———
     for action, keywords in media_map.items():
         if any(k in lower for k in keywords):
