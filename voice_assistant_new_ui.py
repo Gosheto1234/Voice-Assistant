@@ -711,6 +711,7 @@ def execute_command(text):
 def listen_once():
     global is_processing
 
+    # don’t start a new recognition if one is already in flight
     if is_processing:
         return
     is_processing = True
@@ -723,13 +724,16 @@ def listen_once():
         return
 
     try:
+        # capture & recognize
         with sr.Microphone(device_index=idx) as src:
             recognizer.adjust_for_ambient_noise(src, 0.5)
             ui_log("Listening…", "debug")
             audio = recognizer.listen(src, timeout=2, phrase_time_limit=10)
+
         txt = recognizer.recognize_google(audio, language="bg-BG")
         ui_log(f"Heard: {txt}", "info")
 
+        # dispatch & show result
         show_feedback(f"Processing: {txt}")
         result = execute_command(txt)
         show_feedback(result)
@@ -738,24 +742,26 @@ def listen_once():
         ui_log("No understand", "warning")
         show_feedback("…")
     except sr.RequestError as e:
-        ui_log(f"Rec error:{e}", "error")
+        ui_log(f"Rec error: {e}", "error")
         show_feedback("Error")
     except Exception as e:
-        ui_log(f"Unexpected error:{e}", "error")
+        ui_log(f"Unexpected error: {e}", "error")
     finally:
+        # always clear the flag so we can listen again
         is_processing = False
 
-
 def listen_loop():
-    global keep_listening
     while keep_listening:
         listen_once()
 
 def start_listening():
-    global keep_listening, is_processing
-    is_processing = True
-    keep_listening = True  # Enable continuous listening
-    update_status("Listening...")
+    global keep_listening, listener_thread
+    if keep_listening:
+        return
+    keep_listening = True
+    listener_thread = threading.Thread(target=listen_loop, daemon=True)
+    listener_thread.start()
+    update_status("Listening…")
 
     # Run listen_loop in a separate thread so it doesn't block the UI
     threading.Thread(target=listen_loop, daemon=True).start()
