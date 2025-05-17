@@ -996,17 +996,35 @@ def build_ui():
 
 
 if __name__ == "__main__":
-    # 1) If we just updated, notify and remove the flag
+    # 1) If we just updated, notify, fetch & display the changelog, then remove the flag
     if os.path.exists("just_updated.flag"):
-        mb.showinfo("Updated", f"Application updated to {__version__}!")
+        # read the version we just installed
+        version = __version__
+        # GitHub API endpoint for a specific tag
+        tag_api = f"https://api.github.com/repos/Gosheto1234/Voice-Assistant/releases/tags/v{version}"
+        try:
+            r = requests.get(tag_api)
+            r.raise_for_status()
+            release = r.json()
+            changelog = release.get("body", "[no changelog found]")
+        except Exception as e:
+            changelog = f"[failed to fetch changelog: {e}]"
+
+        mb.showinfo(
+            "Updated",
+            f"Application updated to {version}!\n\nChangelog:\n{changelog}"
+        )
         os.remove("just_updated.flag")
+
     else:
-        # 2) Otherwise, check for updates on startup
+        # 2) Otherwise, check for updates on startup as before
         info = query_update()
         if info:
             remote, url, changelog = info
-            if mb.askyesno("Update Available",
-                           f"Version {remote} is available.\n\nChangelog:\n{changelog}\n\nInstall now?"):
+            if mb.askyesno(
+                "Update Available",
+                f"Version {remote} is available.\n\nChangelog:\n{changelog}\n\nInstall now?"
+            ):
                 perform_update(url)
 
     # 3) Build & launch UI
