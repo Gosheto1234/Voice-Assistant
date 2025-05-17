@@ -313,6 +313,30 @@ def send_media_action(key):
     except Exception as e:
         ui_log(f"Media action failed: {e}", "error")
 
+# ——— Helpers for Spotify control ———
+def get_spotify_window():
+    """Return Spotify’s main window HWND, or None if not running."""
+    def _cb(hwnd, result):
+        if win32gui.IsWindowVisible(hwnd):
+            title = win32gui.GetWindowText(hwnd).lower()
+            if "spotify" in title:
+                result.append(hwnd)
+    hwnds = []
+    win32gui.EnumWindows(_cb, hwnds)
+    return hwnds[0] if hwnds else None
+
+def launch_spotify_if_needed():
+    """If Spotify isn’t running, start it via your apps_db."""
+    hwnd = get_spotify_window()
+    if hwnd:
+        return hwnd
+    path = apps_db.get("spotify")
+    if path:
+        os.startfile(path)
+        time.sleep(2)
+        return get_spotify_window()
+    return None
+
 # ——— Keyword Maps ———
 command_map = {
     "open": ["open","стартирай","отвори"],
@@ -526,83 +550,81 @@ def handle_open(args):
 
 
 # 4. Handle closing the application with threading
-def handle_close(args):
-    def close_thread():
-        nm = " ".join(args)
-        exe = nm + ".exe"
-        try:
-            subprocess.call(["taskkill", "/f", "/im", exe], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            ui_log(f"Closed {nm}", "info")
-        except Exception as e:
-            ui_log(f"Close failed: {e}", "error")
-    
-    # Create and start the thread for closing the app
-    threading.Thread(target=close_thread, daemon=True).start()
-
-    
-
-# ——— Core Execution ———
 def execute_command(text):
     show_feedback(f"Processing: {text}")
     logger.debug(f"execute_command: {text}")
     cmd = text.lower().split()
-    if not cmd: return
+    if not cmd:
+        return
 
     # — Relearn Apps —
     if cmd[0] in ("learn","learn apps"):
-        learn_apps(); show_feedback("Apps relearned"); return
+        learn_apps()
+        show_feedback("Apps relearned")
+        return
 
     # — Open/Close Apps —
-    if cmd[0]=="open":
-        handle_open(cmd[1:]); show_feedback(f"Opened {' '.join(cmd[1:])}"); return
-    if cmd[0]=="close":
-        handle_close(cmd[1:]); show_feedback(f"Closed {' '.join(cmd[1:])}"); return
-
-    # — Play Desktop File —
-    if cmd[0]=="play" and len(cmd)>1 and cmd[1]=="file":
-        query=" ".join(cmd[2:]).lower()
-        match=music_db.get(query) or (difflib.get_close_matches(query,music_db.keys(),1,0.6) or [None])[0]
-        if not match:
-            show_feedback("Song not found."); return
-        os.startfile(music_db[match])
-        show_feedback(f"Playing: {os.path.basename(music_db[match])}")
+    if cmd[0] == "open":
+        handle_open(cmd[1:])
+        show_feedback(f"Opened {' '.join(cmd[1:])}")
+        return
+    if cmd[0] == "close":
+        handle_close(cmd[1:])
+        show_feedback(f"Closed {' '.join(cmd[1:])}")
         return
 
-    # — Explicit Player Control —
-    if cmd[0] in media_players:
-        pname=cmd[0]; info=media_players[pname]
-        action = next((a for a,kw in media_map.items() if any(k in text.lower() for k in kw)), None)
-        if not action: show_feedback(f"Specify play/pause/etc. for {pname}"); return
-        hwnd=find_app_window(pname)
-        if not hwnd: ensure_player_running(pname,info["exe"]); hwnd=find_app_window(pname)
-        if hwnd: activate_window(hwnd); time.sleep(0.1)
-        key=info["keys"].get(action)
-        if key: send_media_action(key); show_feedback(f"{pname}: {action}")
-        else: show_feedback(f"{pname} does not support {action}")
+    # — Spotify Control ——
+    # spotify play | spotify pause | spotify next | spotify prev
+    if cmd[0] == "spotify" and len(cmd) > 1:
+        action = cmd[1]
+        hwnd = launch_spotify_if_needed()
+        if not hwnd:
+            show_feedback("Could not launch Spotify.")
+            return
+        activate_window(hwnd)
+        time.sleep(0.1)
+        # Hotkey mapping for Spotify
+        mapping = {
+            "play":    ("space",),
+            "pause":   ("space",),
+            "next":    ("ctrl","right"),
+            "prev":    ("ctrl","left"),
+            "shuffle": ("ctrl","s"),
+            "repeat":  ("ctrl","r"),
+        }
+        keys = mapping.get(action)
+        if keys:
+            pyautogui.hotkey(*keys)
+            show_feedback(f"Spotify: {action}")
+        else:
+            show_feedback(f"Unknown Spotify action: {action}")
         return
 
-    # — Generic Media Control —
-    for action, keywords in media_map.items():
-        if any(k in text.lower() for k in keywords):
-            player=get_current_player()
-            if not player:
-                # launch first configured
-                try:
-                    pn,inf=next(iter(media_players.items()))
-                    ensure_player_running(pn, inf["exe"])
-                    player=get_current_player()
-                except StopIteration:
-                    player=None
-            if not player:
-                show_feedback("No media player found"); return
-            pname, info, hwnd = player
-            if hwnd: activate_window(hwnd); time.sleep(0.1)
-            key=info["keys"].get(action)
-            if key: send_media_action(key); show_feedback(f"{pname}: {action}")
-            else: show_feedback(f"{pname} does not support {action}")
+    # — Play Desktop File ——
+    if cmd[0] == "play" and len(cmd) > 1:
+        # allow “play file song” or “play song”
+        if cmd[1] == "file" and len(cmd) > 2:
+            query = " ".join(cmd[2:])
+        else:
+            query = " ".join(cmd[1:])
+        query = query.lower()
+
+        # exact or fuzzy match in music_db
+        path = music_db.get(query)
+        if not path:
+            close = difflib.get_close_matches(query, music_db.keys(), n=1, cutoff=0.6)
+            if close:
+                path = music_db[close[0]]
+
+        if not path:
+            show_feedback("Song not found on Desktop.")
             return
 
-    # — Discord Control —
+        os.startfile(path)
+        show_feedback(f"Playing: {os.path.basename(path)}")
+        return
+
+    # — Discord Control ——
     for action, keywords in discord_map.items():
         if any(k in text.lower() for k in keywords):
             if focus_app_window("discord"):
@@ -613,8 +635,8 @@ def execute_command(text):
                 show_feedback("Discord not running")
             return
 
-    # — Fallback —
-    show_feedback("No action found.")
+    # — Fallback ——
+    show_feedback("No matching command.")
     logger.warning(f"No action for: {text}")
 
 
