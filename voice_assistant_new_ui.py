@@ -553,90 +553,120 @@ def handle_open(args):
 def execute_command(text):
     show_feedback(f"Processing: {text}")
     logger.debug(f"execute_command: {text}")
-    cmd = text.lower().split()
+    lower = text.lower()
+    cmd = lower.split()
     if not cmd:
         return
 
     # — Relearn Apps —
-    if cmd[0] in ("learn","learn apps"):
+    if cmd[0] in ("learn", "learn apps"):
         learn_apps()
         show_feedback("Apps relearned")
         return
 
     # — Open/Close Apps —
-    if cmd[0] == "open":
+    if cmd[0] in command_map["open"]:
         handle_open(cmd[1:])
         show_feedback(f"Opened {' '.join(cmd[1:])}")
         return
-    if cmd[0] == "close":
+    if cmd[0] in command_map["close"]:
         handle_close(cmd[1:])
         show_feedback(f"Closed {' '.join(cmd[1:])}")
         return
 
     # — Spotify Control ——
-    # spotify play | spotify pause | spotify next | spotify prev
+    # Trigger on prefix "spotify"
     if cmd[0] == "spotify" and len(cmd) > 1:
-        action = cmd[1]
+        # find which media action they said
+        action = next((act for act, kws in media_map.items() if any(k in lower for k in kws)), None)
+        if not action:
+            show_feedback("Specify play/pause/next/etc. for Spotify")
+            return
+
+        # ensure Spotify window
         hwnd = launch_spotify_if_needed()
         if not hwnd:
-            show_feedback("Could not launch Spotify.")
+            show_feedback("Could not launch or find Spotify")
             return
+
         activate_window(hwnd)
         time.sleep(0.1)
-        # Hotkey mapping for Spotify
-        mapping = {
-            "play":    ("space",),
-            "pause":   ("space",),
-            "next":    ("ctrl","right"),
-            "prev":    ("ctrl","left"),
-            "shuffle": ("ctrl","s"),
-            "repeat":  ("ctrl","r"),
+
+        # map our abstract actions to Spotify hotkeys
+        spotify_hotkeys = {
+            "play":        ("space",),
+            "pause":       ("space",),
+            "next":        ("ctrl", "right"),
+            "previous":    ("ctrl", "left"),
+            "volume up":   ("ctrl", "up"),
+            "volume down": ("ctrl", "down"),
         }
-        keys = mapping.get(action)
+        keys = spotify_hotkeys.get(action)
         if keys:
             pyautogui.hotkey(*keys)
             show_feedback(f"Spotify: {action}")
         else:
-            show_feedback(f"Unknown Spotify action: {action}")
+            show_feedback(f"Spotify does not support {action}")
         return
 
     # — Play Desktop File ——
-    if cmd[0] == "play" and len(cmd) > 1:
-        # allow “play file song” or “play song”
-        if cmd[1] == "file" and len(cmd) > 2:
-            query = " ".join(cmd[2:])
-        else:
-            query = " ".join(cmd[1:])
-        query = query.lower()
-
-        # exact or fuzzy match in music_db
-        path = music_db.get(query)
-        if not path:
+    if cmd[0] == "play":
+        # if they said "play file X" or just "play X"
+        parts = cmd[1:]
+        if parts and parts[0] == "file":
+            parts = parts[1:]
+        query = " ".join(parts).lower()
+        match = music_db.get(query)
+        if not match:
             close = difflib.get_close_matches(query, music_db.keys(), n=1, cutoff=0.6)
             if close:
-                path = music_db[close[0]]
-
-        if not path:
-            show_feedback("Song not found on Desktop.")
-            return
-
-        os.startfile(path)
-        show_feedback(f"Playing: {os.path.basename(path)}")
+                match = music_db[close[0]]
+        if match:
+            os.startfile(match)
+            show_feedback(f"Playing: {os.path.basename(match)}")
+        else:
+            show_feedback("Song not found.")
         return
 
     # — Discord Control ——
     for action, keywords in discord_map.items():
-        if any(k in text.lower() for k in keywords):
+        if any(k in lower for k in keywords):
             if focus_app_window("discord"):
-                combo = ("ctrl","shift","m") if action in ("mute","unmute") else ("ctrl","shift","d")
+                combo = ("ctrl", "shift", "m") if action in ("mute", "unmute") else ("ctrl", "shift", "d")
                 pyautogui.hotkey(*combo)
                 show_feedback(f"Discord: {action}")
             else:
                 show_feedback("Discord not running")
             return
 
+    # — Generic Media Control ——
+    for action, keywords in media_map.items():
+        if any(k in lower for k in keywords):
+            pname, info, hwnd = get_current_player()
+            if not pname:
+                # nothing running, try first configured
+                try:
+                    pname, info = next(iter(media_players.items()))
+                    ensure_player_running(pname, info["exe"])
+                    pname, info, hwnd = get_current_player()
+                except StopIteration:
+                    pass
+            if pname:
+                if hwnd:
+                    activate_window(hwnd)
+                    time.sleep(0.1)
+                key = info["keys"].get(action)
+                if key:
+                    send_media_action(key)
+                    show_feedback(f"{pname}: {action}")
+                else:
+                    show_feedback(f"{pname} does not support {action}")
+            else:
+                show_feedback("No media player found")
+            return
+
     # — Fallback ——
-    show_feedback("No matching command.")
+    show_feedback("No action found.")
     logger.warning(f"No action for: {text}")
 
 
