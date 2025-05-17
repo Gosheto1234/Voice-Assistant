@@ -628,45 +628,45 @@ def execute_command(text):
 
     # ——— Play File ———
     if cmd[0] == "play" and len(cmd) > 1:
-    # accept either “play file foo” or “play foo”
-    if cmd[1] == "file":
-        song_query = " ".join(cmd[2:]).lower()
-    else:
-        song_query = " ".join(cmd[1:]).lower()
-
-    names = list(music_db.keys())
-    match = music_db.get(song_query)
-    if not match:
-        close = difflib.get_close_matches(song_query, names, n=1, cutoff=0.6)
-        if close:
-            match = music_db[close[0]]
-
-    if not match:
-        show_feedback("Song not found.")
-        return
-
-    try:
-        # detect which player to use
-        pname, exe_path, hwnd = get_current_player()
-
-        if exe_path:
-            # focus the running player
-            if hwnd:
-                activate_window(hwnd)
-                time.sleep(0.1)
-            # launch the file with that player's exe
-            subprocess.Popen([exe_path, match], close_fds=True)
+        # accept either “play file foo” or “play foo”
+        if cmd[1] == "file":
+            song_query = " ".join(cmd[2:]).lower()
         else:
-            # no player running, just open default
-            os.startfile(match)
+            song_query = " ".join(cmd[1:]).lower()
 
-        show_feedback(f"Playing: {os.path.basename(match)}")
+        names = list(music_db.keys())
+        match = music_db.get(song_query)
+        if not match:
+            close = difflib.get_close_matches(song_query, names, n=1, cutoff=0.6)
+            if close:
+                match = music_db[close[0]]
 
-    except Exception as e:
-        ui_log(f"Play file failed: {e}", "error")
-        show_feedback("Failed to play file")
+        if not match:
+            show_feedback("Song not found.")
+            return
 
-    return
+        try:
+            # detect which player to use
+            pname, exe_path, hwnd = get_current_player()
+
+            if exe_path:
+                # focus the running player
+                if hwnd:
+                    activate_window(hwnd)
+                    time.sleep(0.1)
+                # launch the file with that player's exe
+                subprocess.Popen([exe_path, match], close_fds=True)
+            else:
+                # no player running, just open default
+                os.startfile(match)
+
+            show_feedback(f"Playing: {os.path.basename(match)}")
+
+        except Exception as e:
+            ui_log(f"Play file failed: {e}", "error")
+            show_feedback("Failed to play file")
+
+        return
     # ——— Media control ———
     for action, keywords in media_map.items():
         if any(k in lower for k in keywords):
