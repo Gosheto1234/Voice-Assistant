@@ -618,7 +618,8 @@ def execute_command(text):
 
     # ——— Play File ———
     if cmd[0] == "play" and cmd[1] == "file":
-    song_query = " ".join(cmd[2:]).lower()
+        song_query = " ".join(cmd[2:]).lower()
+    
 
     # 1) Direct match or fuzzy lookup in music_db
     names = list(music_db.keys())
