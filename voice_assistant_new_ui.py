@@ -655,36 +655,42 @@ def execute_command(text):
             # 1) See if any known player is already running
             current = get_current_player()
 
-            # 2) If none running, pick the first installed and launch it
+            # 2) If none running, try the built-in UWP Media Player first
             if not current:
-            if "vlc" in apps_db:
-                subprocess.Popen(apps_db["vlc"], shell=True)
-                time.sleep(2)
-                current = get_current_player()
-            elif media_players:
-                # fallback: first configured player
+                # look up “Media Player” in your apps_db (should point to its .exe or .lnk)
+                mp_path = apps_db.get("media player")
+                if mp_path:
+                    try:
+                        os.startfile(mp_path)
+                        time.sleep(2)
+                        current = get_current_player()
+                    except Exception as e:
+                        ui_log(f"Failed launching Media Player: {e}", "error")
+
+            # 3) Still none? fall back to first JSON-configured player
+            if not current and media_players:
                 pname, info = next(iter(media_players.items()))
                 ensure_player_running(pname, info["exe"])
                 current = get_current_player()
 
-            # 3) Still none? bail out
-            if not current:
-                ui_log("No media player found", "warning")
-                show_feedback("Няма медия плейър")
-                return
+            # 4) If we have a player now, send the hotkey
+            if current:
+                name, info, hwnd = current
+                key = info["keys"].get(action)
+                if key:
+                    if hwnd:
+                        activate_window(hwnd)
+                        time.sleep(0.1)
+                    show_feedback(f"{name}: {action}")
+                    return
+                else:
+                    ui_log(f"No key mapping for {action} in {name}", "warning")
+                    show_feedback(f"{name} не поддържа {action}")
+                    return
 
-            # 4) Send the right hotkey for this action
-            name, info, hwnd = current  # now get the HWND, too
-            key = info["keys"].get(action)
-            if key:
-                if hwnd:
-                    activate_window(hwnd)
-                    time.sleep(0.1)
-
-                show_feedback(f"{name}: {action}")
-            else:
-                ui_log(f"No key mapping for {action} in {name}", "warning")
-                show_feedback(f"{name} не поддържа {action}")
+            # 5) No player at all → bail
+            ui_log("No media player found", "warning")
+            show_feedback("Няма медия плейър")
             return
 
     # ——— Discord voice control ———
