@@ -10,3 +10,7 @@ requests
 nest_asyncio
 asyncio
 winrt-Windows.Media.Control
+pyperclip
+win32gui
+win32con
+win32api
