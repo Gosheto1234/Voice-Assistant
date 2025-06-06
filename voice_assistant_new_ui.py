@@ -101,6 +101,25 @@ def on_update_click():
     if mb.askyesno("Update Available", f"{v}\n{log}\nInstall?"):
         perform_update(u)
 
+
+
+
+# ─── Bulgarian ↔ English action‐word mappings ────────────────────────────────
+BG_TO_EN_ACTION = {
+    "отвори":   "open",
+    "затвори":  "close",
+    "превключи": "switch",
+    "пусни":    "play",
+}
+
+# for typing‐mode toggles:
+BG_TYPE_ON  = "режим писане"        # “type mode”
+BG_TYPE_OFF = "излез режим писане"   # “exit type mode”
+
+
+
+
+
 # ─── App‐scan & commands ─────────────────────────────────────────────────
 
 def scan_installed_apps():
@@ -426,43 +445,62 @@ class VoiceAssistantApp:
     def _callback(self, recognizer, audio):
         """Called from the background thread when speech is detected."""
         try:
+            # Recognize in Bulgarian
             text = recognizer.recognize_google(audio, language="bg-BG")
             print("[You said]", text)
-
             lower = text.lower().strip()
 
-            # — Typing Mode Toggles —
-            if lower == "type mode":
+            # — Typing Mode Toggles (Bulgarian) —
+            if lower == BG_TYPE_ON:
                 self.typing_mode = True
                 print("[Typing Mode] enabled")
                 return
 
-            if lower == "exit type mode":
+            if lower == BG_TYPE_OFF:
                 self.typing_mode = False
                 print("[Typing Mode] disabled")
                 return
 
             # — If in typing mode, send keystrokes via pyautogui —
             if self.typing_mode:
-                if lower == "enter":
-                    pyautogui.press('enter')
+                if lower in ("ентър", "enter"):  # both Bulgarian “ентър” and English “enter”
+                    pyautogui.press("enter")
                 else:
-                    # Type the recognized text followed by a space
+                    # Directly type whatever was recognized (with a trailing space)
                     pyautogui.write(text + " ")
                 return
 
-            # — Music “Play” Command —
-            # If user said “play <something>”:
+            # — Map Bulgarian action‐words to English before further dispatch —
+            words = lower.split()
+            if words:
+                first = words[0]
+                if first in BG_TO_EN_ACTION:
+                    # Rebuild a “pseudo‐English” command string:
+                    en_act = BG_TO_EN_ACTION[first]
+                    rest = " ".join(words[1:])  # everything after the first word
+                    # For example: "отвори калкулатор" → "open калкулатор"
+                    pseudo = f"{en_act} {rest}"
+                    # Now let handle_system_command deal with it
+                    if en_act != "play":
+                        if handle_system_command(pseudo):
+                            return
+                    else:
+                        # “play” in Bulgarian: “пусни …”
+                        song_name = rest
+                        self._play_song(song_name)
+                        return
+
+            # — English “play …” fallback (in case user spoke English) —
             if lower.startswith("play "):
-                song_name = lower[5:]  # everything after “play ”
+                song_name = lower[5:]
                 self._play_song(song_name)
                 return
 
-            # — Otherwise, try open/close/switch apps —
+            # — Otherwise, attempt English open/close/switch (in case user said English) —
             if handle_system_command(text):
                 return
 
-            # (You can hook more intents here if desired.)
+            # (You can hook more intents here…)
 
         except sr.UnknownValueError:
             pass
