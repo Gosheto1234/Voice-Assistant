@@ -2,230 +2,635 @@ import os
 import sys
 import json
 import threading
-import time
 import logging
 from logging.handlers import RotatingFileHandler
 import tkinter as tk
-from tkinter import ttk, Toplevel, scrolledtext, messagebox as mb
+from tkinter import ttk, Toplevel, messagebox as mb, filedialog
 import speech_recognition as sr
-import glob
+from pathlib import Path
+from PIL import Image, ImageTk, ImageSequence
 import subprocess
-import psutil
 import difflib
-import random
+import winreg
 import requests
 import zipfile
-from PIL import Image, ImageTk, ImageSequence
-import win32gui, win32process, win32con
-from winrt.windows.media.control import GlobalSystemMediaTransportControlsSessionManager
-import asyncio
-import nest_asyncio
+import win32gui
+import win32con
+import ctypes
+import win32api
+import win32process
+import pyautogui   # used for typing keystrokes
 
-# ——— Version Handling & Update Checker ———
+# ─── Version Handling & Update Checker ─────────────────────────────────
+
 try:
     from version_info import __version__
 except ImportError:
     __version__ = "0.0.0"
     try:
-        ver_path = os.path.join(
-            os.path.dirname(sys.executable if getattr(sys, "frozen", False) else __file__),
-            "version.json"
-        )
-        with open(ver_path, "r", encoding="utf-8") as vf:
-            __version__ = json.load(vf).get("version", __version__)
-    except Exception:
+        here = Path(sys.executable if getattr(sys, "frozen", False) else __file__).parent
+        remote_ver_file = here / "version.json"
+        __version__ = json.loads(remote_ver_file.read_text()).get("version", __version__)
+    except:
         pass
 
 VERSION_JSON_URL = "https://raw.githubusercontent.com/Gosheto1234/Voice-Assistant/main/version.json"
-UPDATE_ZIP_PATH = "update.zip"
+UPDATE_ZIP_PATH   = "update.zip"
 
-# ——— Logging Setup ———
-LOG_PATH = os.path.join(os.getcwd(), "assistant.log")
+# ─── Paths & Logging ────────────────────────────────────────────────────
+
+BASE_DIR   = Path(__file__).parent
+LOG_PATH   = BASE_DIR / "assistant.log"
+MIC_FILE   = BASE_DIR / "selected_mic.json"
+THEME_JSON = BASE_DIR / "themes.json"
+SEL_THEME  = BASE_DIR / "selected_theme.json"
+APPS_JSON  = BASE_DIR / "apps_index.json"
+USER_CFG   = BASE_DIR / "va_settings.json"  # <-- store media player + music folder here
+
 logger = logging.getLogger("VA")
 logger.setLevel(logging.DEBUG)
-file_handler = RotatingFileHandler(LOG_PATH, maxBytes=1_000_000, backupCount=3, encoding="utf-8")
-formatter = logging.Formatter("%(asctime)s | %(levelname)s | %(message)s")
-file_handler.setFormatter(formatter)
-logger.addHandler(file_handler)
-console_handler = logging.StreamHandler(stream=sys.stdout)
-console_handler.setFormatter(formatter)
-logger.addHandler(console_handler)
+fh = RotatingFileHandler(LOG_PATH, maxBytes=1_000_000, backupCount=3, encoding="utf-8")
+fh.setFormatter(logging.Formatter("%(asctime)s | %(levelname)s | %(message)s"))
+logger.addHandler(fh)
+logger.addHandler(logging.StreamHandler(sys.stdout))
 
-# ——— Persistence Helpers ———
+# ─── Persistence Helpers ─────────────────────────────────────────────────
+
 def load_json(path, default=None):
-    if os.path.exists(path):
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    return default
+    try:
+        return json.loads(Path(path).read_text())
+    except:
+        return default
 
 def save_json(path, data):
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2)
+    Path(path).write_text(json.dumps(data, indent=2))
 
-# ——— Update Functions ———
-def version_tuple(v):
-    return tuple(map(int, v.split('.')))
+# ─── Update Functions ───────────────────────────────────────────────────
 
+def version_tuple(v): return tuple(map(int, v.split(".")))
 
 def query_update():
     try:
-        resp = requests.get(VERSION_JSON_URL, timeout=5)
-        data = resp.json()
-        remote = data.get("version", "0.0.0")
+        r = requests.get(VERSION_JSON_URL, timeout=5)
+        j = r.json()
+        remote = j.get("version","0.0.0")
     except Exception as e:
-        ui_log(f"Update check failed: {e}", "error")
+        logger.error("Update check failed: %s", e)
         return None
     if version_tuple(remote) <= version_tuple(__version__):
         return None
-    download_url = data.get("zip_url")
-    changelog = data.get("changelog", "")
-    return remote, download_url, changelog
+    return remote, j.get("zip_url"), j.get("changelog","")
 
-
-def perform_update(download_url):
+def perform_update(url):
     try:
-        r = requests.get(download_url, timeout=10)
-        r.raise_for_status()
-        with open(UPDATE_ZIP_PATH, 'wb') as f:
-            f.write(r.content)
-        with zipfile.ZipFile(UPDATE_ZIP_PATH, 'r') as z:
-            z.extractall(os.path.dirname(sys.executable if getattr(sys, 'frozen', False) else __file__))
-        mb.showinfo("Updated", f"Updated to new version. Please restart.")
-        main_root.destroy()
+        r = requests.get(url, timeout=10); r.raise_for_status()
+        (BASE_DIR/UPDATE_ZIP_PATH).write_bytes(r.content)
+        with zipfile.ZipFile(UPDATE_ZIP_PATH,"r") as z:
+            z.extractall(BASE_DIR)
+        mb.showinfo("Updated","Please restart app")
+        sys.exit(0)
     except Exception as e:
         mb.showerror("Update Failed", str(e))
-
 
 def on_update_click():
     info = query_update()
     if not info:
-        mb.showinfo("No Update", "You’re on the latest version.")
+        mb.showinfo("No Update","You’re on latest")
         return
-    remote, url, changelog = info
-    if mb.askyesno("Update Available", f"Version {remote} available.\nChangelog:\n{changelog}\nInstall?" ):
-        perform_update(url)
+    v,u,log = info
+    if mb.askyesno("Update Available", f"{v}\n{log}\nInstall?"):
+        perform_update(u)
 
-# ——— Theme & UI Helpers ———
-BASE_DIR = os.path.dirname(__file__)
-SETTINGS = {
-    'themes': os.path.join(BASE_DIR, 'themes.json'),
-    'selected_theme': os.path.join(BASE_DIR, 'selected_theme.json'),
-}
+# ─── App‐scan & commands ─────────────────────────────────────────────────
+
+def scan_installed_apps():
+    apps = {}
+
+    # 1) HKLM Uninstall (32-bit & 64-bit)
+    for hive, flag in (
+        (winreg.HKEY_LOCAL_MACHINE, winreg.KEY_WOW64_32KEY),
+        (winreg.HKEY_LOCAL_MACHINE, winreg.KEY_WOW64_64KEY),
+    ):
+        sub_key = r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall"
+        try:
+            with winreg.OpenKey(hive, sub_key, 0, winreg.KEY_READ | flag) as key:
+                for i in range(winreg.QueryInfoKey(key)[0]):
+                    try:
+                        sub = winreg.EnumKey(key, i)
+                        with winreg.OpenKey(key, sub) as sk:
+                            name, _ = winreg.QueryValueEx(sk, "DisplayName")
+                            icon, _ = winreg.QueryValueEx(sk, "DisplayIcon")
+                            if name and icon:
+                                exe_path = icon.split(",")[0]
+                                apps[name.lower()] = exe_path
+                    except OSError:
+                        continue
+        except OSError:
+            continue
+
+    # 2) HKCU Uninstall (current user)
+    try:
+        cu_key = r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall"
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, cu_key, 0, winreg.KEY_READ) as key:
+            for i in range(winreg.QueryInfoKey(key)[0]):
+                try:
+                    sub = winreg.EnumKey(key, i)
+                    with winreg.OpenKey(key, sub) as sk:
+                        name, _ = winreg.QueryValueEx(sk, "DisplayName")
+                        icon, _ = winreg.QueryValueEx(sk, "DisplayIcon")
+                        if name and icon:
+                            exe_path = icon.split(",")[0]
+                            apps[name.lower()] = exe_path
+                except OSError:
+                    continue
+    except OSError:
+        pass
+
+    # Helper to scan a Start Menu folder for .lnk shortcuts
+    def scan_start_menu_folder(folder_path):
+        for root_dir, _, files in os.walk(folder_path):
+            for fn in files:
+                if fn.lower().endswith(".lnk"):
+                    full = os.path.join(root_dir, fn)
+                    ps = [
+                        "powershell", "-NoProfile",
+                        f"(New-Object -COM WScript.Shell).CreateShortcut('{full}').TargetPath"
+                    ]
+                    try:
+                        tgt = subprocess.check_output(ps, universal_newlines=True).strip()
+                        name = fn.lower().rsplit(".", 1)[0]
+                        if tgt:
+                            apps[name] = tgt
+                    except subprocess.SubprocessError:
+                        continue
+
+    # 3) All Users Start Menu
+    program_data = os.environ.get("PROGRAMDATA", "")
+    all_users_start = os.path.join(program_data, "Microsoft", "Windows", "Start Menu", "Programs")
+    if os.path.isdir(all_users_start):
+        scan_start_menu_folder(all_users_start)
+
+    # 4) Current User’s Start Menu
+    app_data = os.environ.get("APPDATA", "")
+    user_start = os.path.join(app_data, "Microsoft", "Windows", "Start Menu", "Programs")
+    if os.path.isdir(user_start):
+        scan_start_menu_folder(user_start)
+
+    return apps
+
+def load_or_build_app_index():
+    if APPS_JSON.exists():
+        try:
+            return load_json(APPS_JSON, {})
+        except:
+            pass
+    apps = scan_installed_apps()
+    save_json(APPS_JSON, apps)
+    return apps
+
+APP_COMMANDS = load_or_build_app_index()
+
+def handle_system_command(text) -> bool:
+    """
+    Fuzzy “open”, “close” or “switch” based on APP_COMMANDS.
+    Returns True if a command was handled.
+    """
+    t = text.lower().strip()
+    words = t.split()
+    if len(words) < 2:
+        return False
+
+    action, target = words[0], " ".join(words[1:])
+    names = list(APP_COMMANDS.keys())
+    best = difflib.get_close_matches(target, names, n=1, cutoff=0.6)
+    if not best:
+        return False
+
+    app_name = best[0]
+    exe_path = APP_COMMANDS[app_name]
+
+    if action == "open":
+        try:
+            subprocess.Popen(exe_path)
+        except Exception:
+            pass
+        return True
+
+    if action == "close":
+        proc = os.path.basename(exe_path)
+        try:
+            subprocess.run(["taskkill", "/im", proc, "/f"], check=True)
+        except Exception:
+            pass
+        return True
+
+    if action == "switch":
+        # First try to bring an existing window to front
+        if switch_to_window(app_name):
+            return True
+
+        # Otherwise, launch it
+        try:
+            subprocess.Popen(exe_path)
+        except Exception:
+            pass
+        return True
+
+    return False
+
+def switch_to_window(app_name_fragment: str) -> bool:
+    """
+    Search all visible top‐level windows for one whose title contains
+    `app_name_fragment` (case-insensitive). If found, restore/minimize &
+    bring it to the foreground as if Alt+Tabbed to it.
+    """
+    fragment = app_name_fragment.lower()
+    candidates = []
+
+    def _enum(hwnd, _):
+        if win32gui.IsWindowVisible(hwnd):
+            title = win32gui.GetWindowText(hwnd).lower()
+            if fragment in title:
+                candidates.append(hwnd)
+
+    win32gui.EnumWindows(_enum, None)
+    if not candidates:
+        return False
+
+    hwnd = candidates[0]
+    try:
+        # If window is minimized, restore it
+        if win32gui.IsIconic(hwnd):
+            win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+
+        # If not already foreground, attach input threads to force focus
+        foreground_hwnd = win32gui.GetForegroundWindow()
+        if foreground_hwnd != hwnd:
+            current_thread = win32api.GetCurrentThreadId()
+            target_thread, _ = win32process.GetWindowThreadProcessId(hwnd)
+
+            ctypes.windll.user32.AttachThreadInput(current_thread, target_thread, True)
+
+            win32gui.BringWindowToTop(hwnd)
+            win32gui.SetForegroundWindow(hwnd)
+            win32gui.SetActiveWindow(hwnd)
+
+            ctypes.windll.user32.AttachThreadInput(current_thread, target_thread, False)
+        else:
+            win32gui.BringWindowToTop(hwnd)
+
+        return True
+    except Exception:
+        return False
+
+# ─── Theme Helpers ───────────────────────────────────────────────────────
 
 def load_themes():
-    data = load_json(SETTINGS['themes'], {}) or {}
-    if not data:
-        default = {
-            "sakura": {"bg":"#ffeef2","fg":"#5c2a2a","button_bg":"#f7cad0","button_fg":"#5c2a2a"},
-            "Dark": {"bg":"#000","fg":"#fff","button_bg":"#333","button_fg":"#fff"},
+    d = load_json(THEME_JSON, {})
+    if not d:
+        d = {
+            "Light": {"bg":"#f0f0f0","fg":"#000","btn_bg":"#e0e0e0","btn_fg":"#000"},
+            "Dark":  {"bg":"#333","fg":"#eee","btn_bg":"#555","btn_fg":"#fff"},
         }
-        save_json(SETTINGS['themes'], default)
-        return default
-    return data
-
+        save_json(THEME_JSON, d)
+    return d
 
 def load_selected_theme():
-    data = load_json(SETTINGS['selected_theme'], {}) or {}
-    return data.get("theme", "Dark")
+    return load_json(SEL_THEME, {}).get("theme", "Dark")
 
+def save_selected_theme(n):
+    save_json(SEL_THEME, {"theme":n})
 
-def save_selected_theme(theme_name):
-    save_json(SETTINGS['selected_theme'], {"theme": theme_name})
-
-
-def apply_theme(root, theme):
-    bg = theme['bg']; fg=theme['fg']; bbg=theme['button_bg']; bfg=theme['button_fg']
+def apply_theme(root, th):
+    bg, fg = th["bg"], th["fg"]
+    bb, bf = th.get("btn_bg"), th.get("btn_fg")
     root.configure(bg=bg)
-    def rec(w):
-        cls = w.__class__.__name__
-        if cls in ("Frame","Label","Button","Canvas","Toplevel"): w.configure(bg=bg)
-        if cls in ("Label",): w.configure(fg=fg)
-        if cls=="Button": w.configure(bg=bbg, fg=bfg)
-        for c in w.winfo_children(): rec(c)
-    rec(root)
-    ui_log(f"Applied theme {theme}", "info")
+    def walk(w):
+        for c in w.winfo_children():
+            cls = c.__class__.__name__
+            if cls in ("Frame","Toplevel"):
+                c.configure(bg=bg)
+            if cls == "Label":
+                c.configure(bg=bg, fg=fg)
+            if cls == "Button":
+                c.configure(bg=bb, fg=bf)
+            walk(c)
+    walk(root)
 
-# ——— UI Feedback & Logging ———
-log_widget = None; feedback_frame=None; status_label=None
+# ─── Mic Helpers ──────────────────────────────────────────────────────────
 
-def ui_log(msg, lvl="info"):
-    getattr(logger, lvl)(msg)
-    if log_widget:
-        log_widget.insert(tk.END, msg+"\n"); log_widget.see(tk.END)
+def load_mic():
+    return load_json(MIC_FILE, {}).get("device_index", None)
 
-def show_feedback(msg):
-    if feedback_frame:
-        for w in feedback_frame.winfo_children(): w.destroy()
-        tk.Label(feedback_frame, text=msg, anchor="w").pack(fill=tk.X)
+def save_mic(i):
+    save_json(MIC_FILE, {"device_index": i})
 
-# ——— AnimatedDog ———
-class AnimatedDog:
-    def __init__(self, canvas, gif_path, bowl_x, bowl_y, bowl_radius):
-        self.canvas=canvas; self.bowl_x=bowl_x; self.bowl_y=bowl_y; self.bowl_radius=bowl_radius; self.bowl_full=100
-        self.frames=[ImageTk.PhotoImage(f.resize((48,48), Image.Resampling.LANCZOS))
-                     for f in ImageSequence.Iterator(Image.open(gif_path))]
-        self.idx=0; self.step=2
-        self.sprite=canvas.create_image(10,10,image=self.frames[0],anchor="nw")
-        main_root.after(100,self._init_target); threading.Thread(target=self._refill_loop,daemon=True).start()
-        self.anim(); self.move()
-    def _init_target(self): self.target=self._new_target()
-    def _refill_loop(self):
-        while True: time.sleep(60); self.bowl_full=100; self.canvas.itemconfig(self.bowl_id, outline="green",width=3)
-    def _new_target(self):
-        self.canvas.update_idletasks(); w=max(self.canvas.winfo_width(),48);h=max(self.canvas.winfo_height(),48)
-        return (random.randint(0,w-48), random.randint(0,h-48))
-    def anim(self):
-        self.idx=(self.idx+1)%len(self.frames); self.canvas.itemconfig(self.sprite,image=self.frames[self.idx])
-        main_root.after(200,self.anim)
-    def move(self):
-        if hasattr(self,'target'):
-            cx,cy=self.canvas.coords(self.sprite);tx,ty=self.target
-            dx,dy=tx-cx,ty-cy; dist=(dx*dx+dy*dy)**.5
-            if dist<self.step: self.target=self._new_target()
-            else: self.canvas.coords(self.sprite,cx+dx/dist*self.step,cy+dy/dist*self.step)
-        main_root.after(100,self.move)
-    def eat(self):
-        self.bowl_full=0; self.canvas.itemconfig(self.bowl_id, outline="red",width=3)
-        t=tk.Label(main_root,text="🍖",font=("Arial",24),bg="black");t.place(x=self.bowl_x,y=self.bowl_y-50)
-        main_root.after(1000,t.destroy)
+# ─── User Settings (media player & music folder) ──────────────────────────
 
-# ——— UI Construction ———
-def open_settings():
-    win=Toplevel(main_root); win.title("Settings"); win.geometry("300x200")
-    tk.Label(win,text="Theme").pack(pady=5)
-    themes=load_themes(); names=list(themes.keys()); sel=tk.StringVar(value=load_selected_theme())
-    combo=ttk.Combobox(win,values=names,state="readonly",textvariable=sel); combo.pack(pady=5)
-    def apply(): save_selected_theme(sel.get()); apply_theme(main_root,themes[sel.get()]); win.destroy()
-    tk.Button(win,text="Apply",command=apply).pack(pady=10)
+def load_user_cfg():
+    cfg = load_json(USER_CFG, {})
+    return {
+        "media_player": cfg.get("media_player", ""),
+        "music_folder": cfg.get("music_folder", "")
+    }
 
+def save_user_cfg(media_player, music_folder):
+    cfg = {
+        "media_player": media_player,
+        "music_folder": music_folder
+    }
+    save_json(USER_CFG, cfg)
 
-def build_ui():
-    global main_root, log_widget, feedback_frame, status_label
-    main_root=tk.Tk(); main_root.title("Voice Assistant"); main_root.geometry("400x300")
-    tk.Label(main_root,text=f"Version: {__version__}").place(relx=1,rely=0,anchor="ne",x=-10,y=10)
-    canvas=tk.Canvas(main_root,bg="black"); canvas.pack(fill=tk.BOTH,expand=True)
-    bowl_x,bowl_y,rad=200,150,20
-    canvas.create_oval(bowl_x-rad,bowl_y-rad,bowl_x+rad,bowl_y+rad,fill="brown",outline="green",width=3,tags="bowl")
-    dog=AnimatedDog(canvas,os.path.join(BASE_DIR,"annoying_dog.gif"),bowl_x,bowl_y,rad)
-    dog.bowl_id=canvas.find_withtag("bowl")[0]
-    status_label=tk.Label(main_root,text="Idle",bg="black",fg="white"); status_label.place(relx=0.01,rely=0.01,anchor="nw")
-    feedback_frame=tk.Frame(main_root,bg="black"); feedback_frame.pack(side=tk.BOTTOM,fill=tk.X)
-    frame=tk.Frame(main_root,bg="black"); frame.pack(side=tk.BOTTOM,pady=5)
-    tk.Button(frame,text="Start",width=10,command=lambda: ui_log("Start")).pack(side=tk.LEFT,padx=5)
-    tk.Button(frame,text="Stop",width=10,command=lambda: ui_log("Stop")).pack(side=tk.LEFT,padx=5)
-    tk.Button(frame,text="Update",width=10,command=on_update_click).pack(side=tk.LEFT,padx=5)
-    tk.Button(main_root,text="⚙️",width=4,command=open_settings).place(relx=1,x=-10,y=10,anchor="ne")
-    log_widget=scrolledtext.ScrolledText(main_root,height=5); log_widget.pack(side=tk.BOTTOM,fill=tk.X)
-    # Apply theme
-    themes=load_themes(); apply_theme(main_root, themes.get(load_selected_theme()))
-    ui_log("Ready.","info")
-    return main_root
+# ─── Main UI ───────────────────────────────────────────────────────────────
 
-if __name__=='__main__':
-    # On startup update check
-    info=query_update()
+class VoiceAssistantApp:
+    def __init__(self, root):
+        self.root = root
+        root.title("Voice Assistant")
+        root.geometry("500x380")
+
+        # ––––– Top Controls –––––––––––––––––––––––
+        frm = tk.Frame(root)
+        frm.pack(pady=5)
+
+        self.start_btn = tk.Button(frm, text="Start", command=self.start_listening)
+        self.start_btn.pack(side=tk.LEFT)
+
+        self.stop_btn = tk.Button(frm, text="Stop", command=self.stop_listening, state=tk.DISABLED)
+        self.stop_btn.pack(side=tk.LEFT)
+
+        tk.Button(frm, text="⚙️Settings", command=self.open_settings).pack(side=tk.LEFT, padx=5)
+        tk.Button(frm, text="Check Update", command=on_update_click).pack(side=tk.LEFT)
+
+        # ––––– Little Dog GIF in Corner –––––––––––––
+        gif = BASE_DIR / "annoying_dog.gif"
+        if gif.exists():
+            img = Image.open(gif)
+            self.frames = [
+                ImageTk.PhotoImage(f.resize((80,80), Image.LANCZOS))
+                for f in ImageSequence.Iterator(img)
+            ]
+            self._gif_i = 0
+            self.dog_lbl = tk.Label(root, bg=root["bg"])
+            self.dog_lbl.place(relx=1, rely=1, anchor="se", x=-5, y=-5)
+            self._animate_gif()
+
+        # ––––– Speech Recognizer Setup –––––––––––––
+        self.recognizer = sr.Recognizer()
+        self.mic_index = load_mic()
+        self.microphone = (
+            sr.Microphone(device_index=self.mic_index)
+            if self.mic_index is not None else sr.Microphone()
+        )
+
+        # ––––– Background Listener Reference –––––––––––––
+        self.bg_listener = None
+
+        # ––––– Typing Mode Flag –––––––––––––––––––––
+        self.typing_mode = False
+
+        # ––––– Load “preferred media player” & “music folder” –––
+        cfg = load_user_cfg()
+        self.media_player = cfg["media_player"]
+        self.music_folder = cfg["music_folder"]
+
+        # ––––– Apply Theme –––––––––––––––––––––––––––––––––––
+        themes = load_themes()
+        apply_theme(root, themes[load_selected_theme()])
+
+    def _animate_gif(self):
+        self.dog_lbl.config(image=self.frames[self._gif_i])
+        self._gif_i = (self._gif_i + 1) % len(self.frames)
+        self.root.after(100, self._animate_gif)
+
+    def start_listening(self):
+        if not self.bg_listener:
+            # Adjust once for ambient noise
+            with self.microphone as src:
+                self.recognizer.adjust_for_ambient_noise(src, duration=0.5)
+
+            # Start background listening
+            self.bg_listener = self.recognizer.listen_in_background(
+                self.microphone, self._callback
+            )
+            self.start_btn.config(state=tk.DISABLED)
+            self.stop_btn.config(state=tk.NORMAL)
+
+    def stop_listening(self):
+        if self.bg_listener:
+            self.bg_listener(wait_for_stop=False)  # stop background thread
+            self.bg_listener = None
+            self.start_btn.config(state=tk.NORMAL)
+            self.stop_btn.config(state=tk.DISABLED)
+
+    def _callback(self, recognizer, audio):
+        """Called from the background thread when speech is detected."""
+        try:
+            text = recognizer.recognize_google(audio, language="bg-BG")
+            print("[You said]", text)
+
+            lower = text.lower().strip()
+
+            # — Typing Mode Toggles —
+            if lower == "type mode":
+                self.typing_mode = True
+                print("[Typing Mode] enabled")
+                return
+
+            if lower == "exit type mode":
+                self.typing_mode = False
+                print("[Typing Mode] disabled")
+                return
+
+            # — If in typing mode, send keystrokes via pyautogui —
+            if self.typing_mode:
+                if lower == "enter":
+                    pyautogui.press('enter')
+                else:
+                    # Type the recognized text followed by a space
+                    pyautogui.write(text + " ")
+                return
+
+            # — Music “Play” Command —
+            # If user said “play <something>”:
+            if lower.startswith("play "):
+                song_name = lower[5:]  # everything after “play ”
+                self._play_song(song_name)
+                return
+
+            # — Otherwise, try open/close/switch apps —
+            if handle_system_command(text):
+                return
+
+            # (You can hook more intents here if desired.)
+
+        except sr.UnknownValueError:
+            pass
+        except Exception as e:
+            print("Recognition error:", e)
+
+    def _play_song(self, song_name_fragment: str):
+        """
+        Fuzzy‐match the requested song name against filenames in
+        self.music_folder, then launch self.media_player with that file.
+        """
+        if not self.media_player or not os.path.isfile(self.media_player):
+            print("[Music] No media player set in Settings.")
+            return
+        if not self.music_folder or not os.path.isdir(self.music_folder):
+            print("[Music] No valid music folder set in Settings.")
+            return
+
+        # Gather all audio files in the music folder (and subfolders)
+        audio_exts = (".mp3",".wav",".flac",".aac",".ogg",".m4a")
+        candidates = []
+        file_map = {}  # map lowercase name → full path
+        for root_dir, _, files in os.walk(self.music_folder):
+            for fn in files:
+                if fn.lower().endswith(audio_exts):
+                    base = os.path.splitext(fn)[0].lower()
+                    full_path = os.path.join(root_dir, fn)
+                    candidates.append(base)
+                    file_map[base] = full_path
+
+        if not candidates:
+            print("[Music] No audio files found in:", self.music_folder)
+            return
+
+        # Find the best fuzzy match
+        best = difflib.get_close_matches(song_name_fragment.lower(), candidates, n=1, cutoff=0.5)
+        if not best:
+            print(f"[Music] No matching song for '{song_name_fragment}'.")
+            return
+
+        chosen_base = best[0]
+        chosen_path = file_map[chosen_base]
+        print(f"[Music] Playing '{chosen_base}' → {chosen_path}")
+        try:
+            subprocess.Popen([self.media_player, chosen_path])
+        except Exception as e:
+            print(f"[Music] Failed to launch media player: {e}")
+
+    def open_settings(self):
+        win = Toplevel(self.root)
+        win.title("Settings")
+        win.geometry("350x300")
+
+        # — Theme Selector —
+        tk.Label(win, text="Theme:").pack(pady=(10,0))
+        themes = load_themes()
+        tv = tk.StringVar(value=load_selected_theme())
+        cb = ttk.Combobox(win, values=list(themes), textvariable=tv, state="readonly")
+        cb.pack(fill=tk.X, padx=20)
+
+        # — Microphone Selector —
+        tk.Label(win, text="Microphone:").pack(pady=(15,0))
+        mic_names = sr.Microphone.list_microphone_names()
+        mv = tk.StringVar()
+        idx = load_mic()
+        if isinstance(idx, int) and idx < len(mic_names):
+            mv.set(mic_names[idx])
+        elif mic_names:
+            mv.set(mic_names[0])
+        mc = ttk.Combobox(win, values=mic_names, textvariable=mv, state="readonly")
+        mc.pack(fill=tk.X, padx=20)
+
+        # — Preferred Media Player (dropdown) —
+        tk.Label(win, text="Preferred Media Player:").pack(pady=(15,0))
+
+        # Build a list of “likely media players” from APP_COMMANDS keys
+        media_keywords = ("player", "vlc", "media", "spotify", "itunes", "winamp", "foobar")
+        player_names = []
+        player_map = {}  # friendly_name → full exe path
+        for friendly, path in APP_COMMANDS.items():
+            # check if any keyword appears in the friendly name
+            lname = friendly.lower()
+            if any(k in lname for k in media_keywords):
+                player_names.append(friendly)
+                player_map[friendly] = path
+
+        # If user already has a saved media_player, try to select it
+        mp_var = tk.StringVar(value="")
+        cfg = load_user_cfg()
+        if cfg["media_player"]:
+            # find the friendly name whose path matches exactly the saved media_player
+            for friendly, path in player_map.items():
+                if path.lower() == cfg["media_player"].lower():
+                    mp_var.set(friendly)
+                    break
+
+        mp_combo = ttk.Combobox(win, values=player_names, textvariable=mp_var, state="readonly")
+        mp_combo.pack(fill=tk.X, padx=20)
+
+        # Fallback: “Browse” if nothing appears in that list
+        def choose_media_player():
+            path = filedialog.askopenfilename(
+                title="Select Media Player Executable",
+                filetypes=[("Executable","*.exe"),("All Files","*.*")]
+            )
+            if path:
+                # We’ll store it directly as the EXE path—no friendly name
+                mp_var.set(path)
+
+        tk.Button(win, text="Browse…", command=choose_media_player).pack(pady=(5,0))
+
+        # — Music Folder Selector —
+        tk.Label(win, text="Music Folder:").pack(pady=(15,0))
+        mf_var = tk.StringVar(value=load_user_cfg()["music_folder"])
+        mf_entry = tk.Entry(win, textvariable=mf_var, state="readonly")
+        mf_entry.pack(fill=tk.X, padx=20)
+
+        def choose_music_folder():
+            folder = filedialog.askdirectory(title="Select Music Folder")
+            if folder:
+                mf_var.set(folder)
+
+        tk.Button(win, text="Browse…", command=choose_music_folder).pack(pady=(5,0))
+
+        # — Apply & Close —
+        def apply_and_close():
+            # Theme
+            sel_theme = tv.get()
+            save_selected_theme(sel_theme)
+            apply_theme(self.root, themes[sel_theme])
+
+            # Microphone
+            if mic_names:
+                new_mic_idx = mic_names.index(mv.get())
+                save_mic(new_mic_idx)
+                self.mic_index = new_mic_idx
+                self.microphone = sr.Microphone(device_index=new_mic_idx)
+                if self.bg_listener:
+                    self.stop_listening()
+                    self.start_listening()
+
+            # Media player & music folder
+            chosen = mp_var.get().strip()
+            # If `chosen` is one of our friendly names, look up its real path
+            if chosen in player_map:
+                mpath = player_map[chosen]
+            else:
+                # otherwise assume it’s a raw path from “Browse…”
+                mpath = chosen
+
+            mfolder = mf_var.get().strip()
+            save_user_cfg(mpath, mfolder)
+            self.media_player = mpath
+            self.music_folder = mfolder
+
+            win.destroy()
+
+        tk.Button(win, text="Apply", command=apply_and_close).pack(pady=15)
+
+if __name__ == "__main__":
+    root = tk.Tk()
+
+    # Optional auto‐update on launch
+    info = query_update()
     if info:
-        rem, url, log=text=info
-        if mb.askyesno("Update Available",f"Version {rem} available.\nChangelog:\n{log}\nInstall?" ):
-            perform_update(url)
-    app=build_ui(); app.mainloop()
+        v,u,chg = info
+        if mb.askyesno("Update Available", f"{v}\n{chg}\nInstall now?"):
+            perform_update(u)
+
+    VoiceAssistantApp(root)
+    root.mainloop()
