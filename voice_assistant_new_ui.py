@@ -54,7 +54,9 @@ THEME_JSON = BASE_DIR / "themes.json"
 SEL_THEME  = BASE_DIR / "selected_theme.json"
 APPS_JSON  = BASE_DIR / "apps_index.json"
 USER_CFG   = BASE_DIR / "va_settings.json"  # <-- store media player + music folder here
+CREATE_NO_WINDOW = 0x08000000
 mc = MediaController()
+
 
 
 logger = logging.getLogger("VA")
@@ -197,17 +199,25 @@ def scan_installed_apps():
                 if fn.lower().endswith(".lnk"):
                     full = os.path.join(root_dir, fn)
                     ps = [
-                        "powershell", "-NoProfile",
+                        "powershell",
+                        "-NoProfile",
+                        "-WindowStyle", "Hidden",
+                        "-Command",
                         f"(New-Object -COM WScript.Shell).CreateShortcut('{full}').TargetPath"
                     ]
                     try:
-                        tgt = subprocess.check_output(ps, universal_newlines=True).strip()
+                        tgt = subprocess.check_output(
+                            ps,
+                            universal_newlines=True,
+                            stderr=subprocess.DEVNULL,
+                            creationflags=CREATE_NO_WINDOW
+                        ).strip()
                         name = fn.lower().rsplit(".", 1)[0]
                         if tgt:
                             apps[name] = tgt
                     except subprocess.SubprocessError:
                         continue
-
+                        
     # 3) All Users Start Menu
     program_data = os.environ.get("PROGRAMDATA", "")
     all_users_start = os.path.join(program_data, "Microsoft", "Windows", "Start Menu", "Programs")
