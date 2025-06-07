@@ -21,8 +21,6 @@ import win32api
 import win32process
 import pyautogui   # used for typing keystrokes
 from media_control import MediaController
-from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
-import comtypes
 import asyncio
 import keyboard
 
