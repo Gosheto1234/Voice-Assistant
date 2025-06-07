@@ -18,11 +18,17 @@ English
 Main commands can be found here :
 
 open/отвори + app = opens app
+
 close/затвори + app = closes app
+
 switch/превключи + app = switches to app if it's opened
+
 play/пусни + song/or if in spotify = plays song
+
 спри = if song plays it pauses the song
+
 режим писане = toggles type mode (only triggers in bulgarian)
+
 излез режим писане = exits type mode (only triggers in bulgarian)
 
 
