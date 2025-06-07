@@ -6,4 +6,4 @@ pyautogui
 pycaw
 comtypes
 keyboard
-pywin32==310
+
