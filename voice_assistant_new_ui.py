@@ -20,6 +20,11 @@ import ctypes
 import win32api
 import win32process
 import pyautogui   # used for typing keystrokes
+from media_control import MediaController
+from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
+import comtypes
+import asyncio
+import keyboard
 
 # ─── Version Handling & Update Checker ─────────────────────────────────
 
@@ -46,6 +51,8 @@ THEME_JSON = BASE_DIR / "themes.json"
 SEL_THEME  = BASE_DIR / "selected_theme.json"
 APPS_JSON  = BASE_DIR / "apps_index.json"
 USER_CFG   = BASE_DIR / "va_settings.json"  # <-- store media player + music folder here
+mc = MediaController()
+
 
 logger = logging.getLogger("VA")
 logger.setLevel(logging.DEBUG)
@@ -104,17 +111,32 @@ def on_update_click():
 
 
 
-# ─── Bulgarian ↔ English action‐word mappings ────────────────────────────────
+# ─── Bulgarian ↔ English action-word mappings ────────────────────────────────
 BG_TO_EN_ACTION = {
-    "отвори":   "open",
-    "затвори":  "close",
-    "превключи": "switch",
-    "пусни":    "play",
+    # “open” synonyms
+    "отвори":     "open",
+    "стартирай":  "open",
+    "пусни":      "open",
+
+    # “close” synonyms
+    "затвори":    "close",
+    "спри":       "close",
+    "затвори го": "close",
+
+    # “switch” synonyms
+    "превключи":  "switch",
+    "смени":      "switch",
+    "смени на":   "switch",
+
+    # “play” synonyms (for media & music)
+    "пусни":      "play",
+    "изпълни":    "play",
+    "слушай":     "play",
 }
 
-# for typing‐mode toggles:
-BG_TYPE_ON  = "режим писане"        # “type mode”
-BG_TYPE_OFF = "излез режим писане"   # “exit type mode”
+# Typing-mode toggles with a few alternative phrases
+BG_TYPE_ON  = ("режим писане", "режим за писане", "включи писане")
+BG_TYPE_OFF = ("излез режим писане", "изключи писане", "спри писане")
 
 
 
@@ -367,6 +389,20 @@ class VoiceAssistantApp:
         self.root = root
         root.title("Voice Assistant")
         root.geometry("500x380")
+        
+        # ── Volume control setup via pycaw ────────────────────────
+        devices = AudioUtilities.GetSpeakers()
+        interface = devices.Activate(
+            IAudioEndpointVolume._iid_, comtypes.CLSCTX_ALL, None
+        )
+        self.volume = comtypes.cast(interface, comtypes.POINTER(IAudioEndpointVolume))
+
+        # ── Mic indicator ─────────────────────────────────────────
+        self.mic_indicator = tk.Label(root, text="● Mic: OFF", fg="red", font=("Segoe UI", 10, "bold"))
+        self.mic_indicator.place(relx=0.01, rely=0.95, anchor="sw")
+
+        # -------Music Controls--------
+        self.mc = MediaController()
 
         # ––––– Top Controls –––––––––––––––––––––––
         frm = tk.Frame(root)
@@ -434,6 +470,7 @@ class VoiceAssistantApp:
             )
             self.start_btn.config(state=tk.DISABLED)
             self.stop_btn.config(state=tk.NORMAL)
+            self.mic_indicator.config(text="● Mic: ON", fg="green")
 
     def stop_listening(self):
         if self.bg_listener:
@@ -441,66 +478,183 @@ class VoiceAssistantApp:
             self.bg_listener = None
             self.start_btn.config(state=tk.NORMAL)
             self.stop_btn.config(state=tk.DISABLED)
+            self.mic_indicator.config(text="● Mic: OFF", fg="red")
+
+class VoiceAssistantApp:
+    def __init__(self, root):
+        self.root = root
+        root.title("Voice Assistant")
+        root.geometry("500x380")
+
+        # ── Volume control setup via pycaw ────────────────────────
+        devices = AudioUtilities.GetSpeakers()
+        interface = devices.Activate(
+            IAudioEndpointVolume._iid_, comtypes.CLSCTX_ALL, None
+        )
+        self.volume = comtypes.cast(interface, comtypes.POINTER(IAudioEndpointVolume))
+
+        # ── Mic indicator ─────────────────────────────────────────
+        self.mic_indicator = tk.Label(
+            root, text="● Mic: OFF", fg="red", font=("Segoe UI", 10, "bold")
+        )
+        self.mic_indicator.place(relx=0.01, rely=0.95, anchor="sw")
+
+        # ── Music controller ──────────────────────────────────────
+        self.mc = MediaController()
+
+        # ––––– Top Controls –––––––––––––––––––––––––––––––––––––
+        frm = tk.Frame(root)
+        frm.pack(pady=5)
+        self.start_btn = tk.Button(frm, text="Start", command=self.start_listening)
+        self.start_btn.pack(side=tk.LEFT)
+        self.stop_btn = tk.Button(
+            frm, text="Stop", command=self.stop_listening, state=tk.DISABLED
+        )
+        self.stop_btn.pack(side=tk.LEFT)
+        tk.Button(frm, text="⚙️Settings", command=self.open_settings).pack(
+            side=tk.LEFT, padx=5
+        )
+        tk.Button(frm, text="Check Update", command=on_update_click).pack(
+            side=tk.LEFT
+        )
+
+        # ––––– Little Dog GIF in Corner ––––––––––––––––––––––––––
+        gif = BASE_DIR / "annoying_dog.gif"
+        if gif.exists():
+            img = Image.open(gif)
+            self.frames = [
+                ImageTk.PhotoImage(f.resize((80, 80), Image.LANCZOS))
+                for f in ImageSequence.Iterator(img)
+            ]
+            self._gif_i = 0
+            self.dog_lbl = tk.Label(root, bg=root["bg"])
+            self.dog_lbl.place(relx=1, rely=1, anchor="se", x=-5, y=-5)
+            self._animate_gif()
+
+        # ––––– Speech Recognizer Setup –––––––––––––––––––––––––––
+        self.recognizer = sr.Recognizer()
+        self.mic_index = load_mic()
+        self.microphone = (
+            sr.Microphone(device_index=self.mic_index)
+            if self.mic_index is not None
+            else sr.Microphone()
+        )
+
+        # ––––– Background Listener Reference –––––––––––––––––––––
+        self.bg_listener = None
+
+        # ––––– Typing Mode Flag –––––––––––––––––––––––––––––––––
+        self.typing_mode = False
+
+        # ––––– Load “preferred media player” & “music folder” –––––
+        cfg = load_user_cfg()
+        self.media_player = cfg["media_player"]
+        self.music_folder = cfg["music_folder"]
+
+        # ––––– Apply Theme –––––––––––––––––––––––––––––––––––––
+        themes = load_themes()
+        apply_theme(root, themes[load_selected_theme()])
+
+    def _animate_gif(self):
+        self.dog_lbl.config(image=self.frames[self._gif_i])
+        self._gif_i = (self._gif_i + 1) % len(self.frames)
+        self.root.after(100, self._animate_gif)
+
+    def start_listening(self):
+        if not self.bg_listener:
+            with self.microphone as src:
+                self.recognizer.adjust_for_ambient_noise(src, duration=0.5)
+            self.bg_listener = self.recognizer.listen_in_background(
+                self.microphone, self._callback
+            )
+            self.start_btn.config(state=tk.DISABLED)
+            self.stop_btn.config(state=tk.NORMAL)
+            self.mic_indicator.config(text="● Mic: ON", fg="green")
+
+    def stop_listening(self):
+        if self.bg_listener:
+            self.bg_listener(wait_for_stop=False)
+            self.bg_listener = None
+            self.start_btn.config(state=tk.NORMAL)
+            self.stop_btn.config(state=tk.DISABLED)
+            self.mic_indicator.config(text="● Mic: OFF", fg="red")
 
     def _callback(self, recognizer, audio):
         """Called from the background thread when speech is detected."""
         try:
-            # Recognize in Bulgarian
+            # 1) Recognize speech
             text = recognizer.recognize_google(audio, language="bg-BG")
-            print("[You said]", text)
             lower = text.lower().strip()
+            print("[You said]", text)
 
-            # — Typing Mode Toggles (Bulgarian) —
-            if lower == BG_TYPE_ON:
+            # 2) Volume controls (pycaw remains)
+            if lower in ("запази", "mute"):
+                self.volume.SetMute(1, None); print("[Volume] muted"); return
+            if lower in ("възстанови звук", "unmute"):
+                self.volume.SetMute(0, None); print("[Volume] unmuted"); return
+            if lower in ("свиване", "volume down", "громкост надолу"):
+                curr = self.volume.GetMasterVolumeLevelScalar()
+                new = max(0.0, curr - 0.1)
+                self.volume.SetMasterVolumeLevelScalar(new, None)
+                print(f"[Volume] down → {new:.1%}")
+                return
+            if lower in ("повече звук", "volume up", "громкост нагоре"):
+                curr = self.volume.GetMasterVolumeLevelScalar()
+                new = min(1.0, curr + 0.1)
+                self.volume.SetMasterVolumeLevelScalar(new, None)
+                print(f"[Volume] up → {new:.1%}")
+                return
+
+            # 3) System‐level Media controls via keyboard media keys
+            if lower in ("пауза", "pause"):
+                keyboard.send("play/pause media"); print("[Media] play/pause"); return
+
+            if lower in ("пусни", "продължи", "play", "resume"):
+                # some players treat play/pause the same; if you need distinct resume, remove pause toggle
+                keyboard.send("play/pause media"); print("[Media] play/resume"); return
+
+            if lower in ("следваща песен", "следващ", "next"):
+                keyboard.send("next track"); print("[Media] next"); return
+
+            if lower in ("предишна песен", "предишен", "previous"):
+                keyboard.send("previous track"); print("[Media] previous"); return
+
+            if lower in ("спри", "stop"):
+                keyboard.send("stop media"); print("[Media] stop"); return
+
+            # 4) Typing mode
+            if lower in BG_TYPE_ON:
                 self.typing_mode = True
                 print("[Typing Mode] enabled")
                 return
-
-            if lower == BG_TYPE_OFF:
+            if lower in BG_TYPE_OFF:
                 self.typing_mode = False
                 print("[Typing Mode] disabled")
                 return
-
-            # — If in typing mode, send keystrokes via pyautogui —
             if self.typing_mode:
-                if lower in ("ентър", "enter"):  # both Bulgarian “ентър” and English “enter”
+                if lower in ("ентър", "enter"):
                     pyautogui.press("enter")
                 else:
-                    # Directly type whatever was recognized (with a trailing space)
                     pyautogui.write(text + " ")
                 return
 
-            # — Map Bulgarian action‐words to English before further dispatch —
+            # 5) Bulgarian → English action mapping for open/close/switch/play
             words = lower.split()
-            if words:
-                first = words[0]
-                if first in BG_TO_EN_ACTION:
-                    # Rebuild a “pseudo‐English” command string:
-                    en_act = BG_TO_EN_ACTION[first]
-                    rest = " ".join(words[1:])  # everything after the first word
-                    # For example: "отвори калкулатор" → "open калкулатор"
-                    pseudo = f"{en_act} {rest}"
-                    # Now let handle_system_command deal with it
-                    if en_act != "play":
-                        if handle_system_command(pseudo):
-                            return
-                    else:
-                        # “play” in Bulgarian: “пусни …”
-                        song_name = rest
-                        self._play_song(song_name)
-                        return
+            if words and words[0] in BG_TO_EN_ACTION:
+                en_act = BG_TO_EN_ACTION[words[0]]
+                rest   = " ".join(words[1:])
+                if en_act == "play":
+                    self._play_song(rest); return
+                if handle_system_command(f"{en_act} {rest}"):
+                    return
 
-            # — English “play …” fallback (in case user spoke English) —
+            # 6) English “play …” fallback
             if lower.startswith("play "):
-                song_name = lower[5:]
-                self._play_song(song_name)
-                return
+                self._play_song(lower[5:]); return
 
-            # — Otherwise, attempt English open/close/switch (in case user said English) —
+            # 7) English open/close/switch fallback
             if handle_system_command(text):
                 return
-
-            # (You can hook more intents here…)
 
         except sr.UnknownValueError:
             pass
@@ -508,44 +662,33 @@ class VoiceAssistantApp:
             print("Recognition error:", e)
 
     def _play_song(self, song_name_fragment: str):
-        """
-        Fuzzy‐match the requested song name against filenames in
-        self.music_folder, then launch self.media_player with that file.
-        """
+        """Fuzzy‐match and launch a song via self.media_player."""
         if not self.media_player or not os.path.isfile(self.media_player):
-            print("[Music] No media player set in Settings.")
-            return
+            print("[Music] No media player set in Settings."); return
         if not self.music_folder or not os.path.isdir(self.music_folder):
-            print("[Music] No valid music folder set in Settings.")
-            return
+            print("[Music] No valid music folder set in Settings."); return
 
-        # Gather all audio files in the music folder (and subfolders)
-        audio_exts = (".mp3",".wav",".flac",".aac",".ogg",".m4a")
-        candidates = []
-        file_map = {}  # map lowercase name → full path
+        audio_exts = (".mp3", ".wav", ".flac", ".aac", ".ogg", ".m4a")
+        candidates, file_map = [], {}
         for root_dir, _, files in os.walk(self.music_folder):
             for fn in files:
                 if fn.lower().endswith(audio_exts):
                     base = os.path.splitext(fn)[0].lower()
-                    full_path = os.path.join(root_dir, fn)
+                    full = os.path.join(root_dir, fn)
                     candidates.append(base)
-                    file_map[base] = full_path
+                    file_map[base] = full
 
         if not candidates:
-            print("[Music] No audio files found in:", self.music_folder)
-            return
+            print("[Music] No audio files found in:", self.music_folder); return
 
-        # Find the best fuzzy match
         best = difflib.get_close_matches(song_name_fragment.lower(), candidates, n=1, cutoff=0.5)
         if not best:
-            print(f"[Music] No matching song for '{song_name_fragment}'.")
-            return
+            print(f"[Music] No matching song for '{song_name_fragment}'."); return
 
-        chosen_base = best[0]
-        chosen_path = file_map[chosen_base]
-        print(f"[Music] Playing '{chosen_base}' → {chosen_path}")
+        path = file_map[best[0]]
+        print(f"[Music] Playing '{best[0]}' → {path}")
         try:
-            subprocess.Popen([self.media_player, chosen_path])
+            subprocess.Popen([self.media_player, path])
         except Exception as e:
             print(f"[Music] Failed to launch media player: {e}")
 
@@ -669,6 +812,6 @@ if __name__ == "__main__":
         v,u,chg = info
         if mb.askyesno("Update Available", f"{v}\n{chg}\nInstall now?"):
             perform_update(u)
-
+    
     VoiceAssistantApp(root)
     root.mainloop()
