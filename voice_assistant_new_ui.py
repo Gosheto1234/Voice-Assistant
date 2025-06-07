@@ -392,36 +392,33 @@ class VoiceAssistantApp:
         self.root = root
         root.title("Voice Assistant")
         root.geometry("500x380")
-       
-        
+
         # ── Volume control setup via pycaw ────────────────────────
-        devices = AudioUtilities.GetSpeakers()
+        devices   = AudioUtilities.GetSpeakers()
         interface = devices.Activate(
             IAudioEndpointVolume._iid_, comtypes.CLSCTX_ALL, None
         )
         self.volume = comtypes.cast(interface, comtypes.POINTER(IAudioEndpointVolume))
 
         # ── Mic indicator ─────────────────────────────────────────
-        self.mic_indicator = tk.Label(root, text="● Mic: OFF", fg="red", font=("Segoe UI", 10, "bold"))
+        self.mic_indicator = tk.Label(
+            root, text="● Mic: OFF", fg="red", font=("Segoe UI", 10, "bold")
+        )
         self.mic_indicator.place(relx=0.01, rely=0.95, anchor="sw")
 
-        # -------Music Controls--------
+        # ── Media controller ───────────────────────────────────────
         self.mc = MediaController()
 
-        # ––––– Top Controls –––––––––––––––––––––––
-        frm = tk.Frame(root)
-        frm.pack(pady=5)
-
+        # ── Top Controls ───────────────────────────────────────────
+        frm = tk.Frame(root); frm.pack(pady=5)
         self.start_btn = tk.Button(frm, text="Start", command=self.start_listening)
         self.start_btn.pack(side=tk.LEFT)
-
         self.stop_btn = tk.Button(frm, text="Stop", command=self.stop_listening, state=tk.DISABLED)
         self.stop_btn.pack(side=tk.LEFT)
-
-        tk.Button(frm, text="⚙️Settings", command=self.open_settings).pack(side=tk.LEFT, padx=5)
+        tk.Button(frm, text="⚙️Settings",   command=self.open_settings).pack(side=tk.LEFT, padx=5)
         tk.Button(frm, text="Check Update", command=on_update_click).pack(side=tk.LEFT)
 
-        # ––––– Little Dog GIF in Corner –––––––––––––
+        # ── Little Dog GIF ─────────────────────────────────────────
         gif = BASE_DIR / "annoying_dog.gif"
         if gif.exists():
             img = Image.open(gif)
@@ -429,46 +426,41 @@ class VoiceAssistantApp:
                 ImageTk.PhotoImage(f.resize((80,80), Image.LANCZOS))
                 for f in ImageSequence.Iterator(img)
             ]
-            self._gif_i = 0
+            self._gif_i  = 0
             self.dog_lbl = tk.Label(root, bg=root["bg"])
             self.dog_lbl.place(relx=1, rely=1, anchor="se", x=-5, y=-5)
             self._animate_gif()
 
-        # ––––– Speech Recognizer Setup –––––––––––––
-        self.recognizer = sr.Recognizer()
-        self.mic_index = load_mic()
-        self.microphone = (
+        # ── Speech Recognizer ──────────────────────────────────────
+        self.recognizer   = sr.Recognizer()
+        self.mic_index    = load_mic()
+        self.microphone   = (
             sr.Microphone(device_index=self.mic_index)
             if self.mic_index is not None else sr.Microphone()
         )
-
-        # ––––– Background Listener Reference –––––––––––––
         self.bg_listener = None
-
-        # ––––– Typing Mode Flag –––––––––––––––––––––
         self.typing_mode = False
 
-        # ––––– Load “preferred media player” & “music folder” –––
+        # ── Load user config ───────────────────────────────────────
         cfg = load_user_cfg()
         self.media_player = cfg["media_player"]
         self.music_folder = cfg["music_folder"]
 
-        # ––––– Apply Theme –––––––––––––––––––––––––––––––––––
+        # ── Apply theme ───────────────────────────────────────────
         themes = load_themes()
         apply_theme(root, themes[load_selected_theme()])
+
 
     def _animate_gif(self):
         self.dog_lbl.config(image=self.frames[self._gif_i])
         self._gif_i = (self._gif_i + 1) % len(self.frames)
         self.root.after(100, self._animate_gif)
 
+
     def start_listening(self):
         if not self.bg_listener:
-            # Adjust once for ambient noise
             with self.microphone as src:
                 self.recognizer.adjust_for_ambient_noise(src, duration=0.5)
-
-            # Start background listening
             self.bg_listener = self.recognizer.listen_in_background(
                 self.microphone, self._callback
             )
@@ -476,13 +468,198 @@ class VoiceAssistantApp:
             self.stop_btn.config(state=tk.NORMAL)
             self.mic_indicator.config(text="● Mic: ON", fg="green")
 
+
     def stop_listening(self):
         if self.bg_listener:
-            self.bg_listener(wait_for_stop=False)  # stop background thread
+            self.bg_listener(wait_for_stop=False)
             self.bg_listener = None
             self.start_btn.config(state=tk.NORMAL)
             self.stop_btn.config(state=tk.DISABLED)
             self.mic_indicator.config(text="● Mic: OFF", fg="red")
+
+
+    def _callback(self, recognizer, audio):
+        """Called from the background thread when speech is detected."""
+        try:
+            # 1) recognize speech
+            text  = recognizer.recognize_google(audio, language="bg-BG")
+            lower = text.lower().strip()
+            print("[You said]", text)
+
+            # 2) volume controls
+            if lower in ("запази", "mute"):
+                self.volume.SetMute(1, None); print("[Volume] muted"); return
+            if lower in ("възстанови звук", "unmute"):
+                self.volume.SetMute(0, None); print("[Volume] unmuted"); return
+            if lower in ("свиване", "volume down", "громкост надолу"):
+                curr = self.volume.GetMasterVolumeLevelScalar()
+                new  = max(0.0, curr - 0.1)
+                self.volume.SetMasterVolumeLevelScalar(new, None)
+                print(f"[Volume] down → {new:.1%}"); return
+            if lower in ("повече звук", "volume up", "громкост нагоре"):
+                curr = self.volume.GetMasterVolumeLevelScalar()
+                new  = min(1.0, curr + 0.1)
+                self.volume.SetMasterVolumeLevelScalar(new, None)
+                print(f"[Volume] up → {new:.1%}"); return
+
+            # 3) media controls via keyboard
+            if lower in ("пауза", "pause"):
+                keyboard.send("play/pause media"); print("[Media] play/pause"); return
+            if lower in ("пусни", "продължи", "play", "resume"):
+                keyboard.send("play/pause media"); print("[Media] play/resume"); return
+            if lower in ("следваща песен", "следващ", "next"):
+                keyboard.send("next track"); print("[Media] next"); return
+            if lower in ("предишна песен", "предишен", "previous"):
+                keyboard.send("previous track"); print("[Media] previous"); return
+            if lower in ("спри", "stop"):
+                keyboard.send("stop media"); print("[Media] stop"); return
+
+            # 4) typing mode
+            if lower in BG_TYPE_ON:
+                self.typing_mode = True; print("[Typing Mode] enabled"); return
+            if lower in BG_TYPE_OFF:
+                self.typing_mode = False; print("[Typing Mode] disabled"); return
+            if self.typing_mode:
+                if lower in ("ентър", "enter"):
+                    pyautogui.press("enter")
+                else:
+                    pyautogui.write(text + " ")
+                return
+
+            # 5) Bulgarian → English open/close/switch/play
+            words = lower.split()
+            if words and words[0] in BG_TO_EN_ACTION:
+                en_act = BG_TO_EN_ACTION[words[0]]
+                rest   = " ".join(words[1:])
+                if en_act == "play":
+                    self._play_song(rest); return
+                if handle_system_command(f"{en_act} {rest}"):
+                    return
+
+            # 6) English “play …” fallback
+            if lower.startswith("play "):
+                self._play_song(lower[5:]); return
+
+            # 7) English open/close/switch fallback
+            if handle_system_command(text):
+                return
+
+        except sr.UnknownValueError:
+            pass
+        except Exception as e:
+            print("Recognition error:", e)
+
+
+    def _play_song(self, song_name_fragment: str):
+        """Fuzzy-match a file in self.music_folder and launch it."""
+        if not self.media_player or not os.path.isfile(self.media_player):
+            print("[Music] No media player set."); return
+        if not self.music_folder or not os.path.isdir(self.music_folder):
+            print("[Music] No music folder set."); return
+
+        audio_exts = (".mp3",".wav",".flac",".aac",".ogg",".m4a")
+        candidates, file_map = [], {}
+        for root_dir, _, files in os.walk(self.music_folder):
+            for fn in files:
+                if fn.lower().endswith(audio_exts):
+                    base = os.path.splitext(fn)[0].lower()
+                    full = os.path.join(root_dir, fn)
+                    candidates.append(base)
+                    file_map[base] = full
+
+        if not candidates:
+            print("[Music] No audio files found."); return
+
+        best = difflib.get_close_matches(song_name_fragment.lower(), candidates, n=1, cutoff=0.5)
+        if not best:
+            print(f"[Music] No match for {song_name_fragment!r}."); return
+
+        path = file_map[best[0]]
+        print(f"[Music] Playing {best[0]!r} → {path}")
+        try:
+            subprocess.Popen([self.media_player, path])
+        except Exception as e:
+            print(f"[Music] Failed to launch player: {e}")
+
+
+    def open_settings(self):
+        win = Toplevel(self.root)
+        win.title("Settings")
+        win.geometry("350x300")
+
+        # — Theme Selector —
+        tk.Label(win, text="Theme:").pack(pady=(10,0))
+        themes = load_themes()
+        tv = tk.StringVar(value=load_selected_theme())
+        cb = ttk.Combobox(win, values=list(themes), textvariable=tv, state="readonly")
+        cb.pack(fill=tk.X, padx=20)
+
+        # — Microphone Selector —
+        tk.Label(win, text="Microphone:").pack(pady=(15,0))
+        mic_names = sr.Microphone.list_microphone_names()
+        mv = tk.StringVar()
+        idx = load_mic()
+        if isinstance(idx, int) and idx < len(mic_names):
+            mv.set(mic_names[idx])
+        elif mic_names:
+            mv.set(mic_names[0])
+        mc_combo = ttk.Combobox(win, values=mic_names, textvariable=mv, state="readonly")
+        mc_combo.pack(fill=tk.X, padx=20)
+
+        # — Media Player Selector —
+        tk.Label(win, text="Preferred Media Player:").pack(pady=(15,0))
+        media_keywords = ("player","vlc","spotify","itunes","winamp","foobar")
+        player_names, player_map = [], {}
+        for friendly, path in APP_COMMANDS.items():
+            if any(k in friendly for k in media_keywords):
+                player_names.append(friendly)
+                player_map[friendly] = path
+        mp_var = tk.StringVar(value="")
+        cfg = load_user_cfg()
+        for friendly, path in player_map.items():
+            if path.lower() == cfg["media_player"].lower():
+                mp_var.set(friendly); break
+        mp_combo = ttk.Combobox(win, values=player_names, textvariable=mp_var, state="readonly")
+        mp_combo.pack(fill=tk.X, padx=20)
+        def choose_media_player():
+            p = filedialog.askopenfilename(
+                title="Select Media Player", filetypes=[("EXE","*.exe"),("All","*.*")]
+            )
+            if p: mp_var.set(p)
+        tk.Button(win, text="Browse…", command=choose_media_player).pack(pady=(5,0))
+
+        # — Music Folder Selector —
+        tk.Label(win, text="Music Folder:").pack(pady=(15,0))
+        mf_var = tk.StringVar(value=cfg["music_folder"])
+        mf_entry = tk.Entry(win, textvariable=mf_var, state="readonly")
+        mf_entry.pack(fill=tk.X, padx=20)
+        def choose_music_folder():
+            d = filedialog.askdirectory(title="Select Music Folder")
+            if d: mf_var.set(d)
+        tk.Button(win, text="Browse…", command=choose_music_folder).pack(pady=(5,0))
+
+        # — Apply & Close —
+        def apply_and_close():
+            # theme
+            save_selected_theme(tv.get())
+            apply_theme(self.root, themes[tv.get()])
+            # mic
+            if mic_names:
+                new_idx = mic_names.index(mv.get())
+                save_mic(new_idx)
+                self.mic_index = new_idx
+                self.microphone = sr.Microphone(device_index=new_idx)
+                if self.bg_listener:
+                    self.stop_listening(); self.start_listening()
+            # media player & music folder
+            chosen = mp_var.get().strip()
+            mpath = player_map.get(chosen, chosen)
+            save_user_cfg(mpath, mf_var.get().strip())
+            self.media_player  = mpath
+            self.music_folder  = mf_var.get().strip()
+            win.destroy()
+
+        tk.Button(win, text="Apply", command=apply_and_close).pack(pady=15)
 
 
 if __name__ == "__main__":
