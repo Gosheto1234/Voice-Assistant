@@ -6,3 +6,4 @@ pyautogui
 pywin32
 winrt-Windows.Media.Control
 pycaw
+comtypes
