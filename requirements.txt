@@ -6,4 +6,4 @@ pyautogui
 pycaw
 comtypes
 keyboard
-win32gui
+pywin32
