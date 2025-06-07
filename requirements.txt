@@ -6,4 +6,3 @@ pyautogui
 pycaw
 comtypes
 keyboard
-
