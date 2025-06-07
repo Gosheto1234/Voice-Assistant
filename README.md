@@ -2,7 +2,7 @@
 This is voice assistant that is made from python
 Main goal is to develop my skills with AI (and also learn some coding in the way) 
 
-Main Features :
+   Main Features :
 
 Opening/Closing apps
 
@@ -15,7 +15,7 @@ Playing/stoping music (basic music stuff)
 Ability to play music from folder (go into setting -> music folder )
 
 
-Language support:
+   Language support:
 Bulgarian
 English
 
@@ -25,7 +25,7 @@ English
 
 
 
-Main commands can be found here :
+   Main commands can be found here :
 
 open/отвори + app = opens app
 
