@@ -4,3 +4,4 @@ Pillow
 requests
 pyautogui
 pywin32
+winrt-Windows.Media.Control
