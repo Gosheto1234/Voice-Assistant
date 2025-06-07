@@ -15,6 +15,11 @@ Bulgarian
 English
 
 
+
+
+
+
+
 Main commands can be found here :
 
 open/отвори + app = opens app
@@ -30,6 +35,12 @@ play/пусни + song/or if in spotify = plays song
 режим писане = toggles type mode (only triggers in bulgarian)
 
 излез режим писане = exits type mode (only triggers in bulgarian)
+
+
+
+
+
+
 
 
 
