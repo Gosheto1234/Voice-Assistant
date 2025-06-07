@@ -7,3 +7,4 @@ pycaw
 comtypes
 keyboard
 pywin32
+winrt
