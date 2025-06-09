@@ -26,22 +26,21 @@ import asyncio
 import keyboard
 from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
 import comtypes
+from pathlib import Path
 
 
-# ─── Version Handling & Update Checker ─────────────────────────────────
+# ─── Version Handling & Update Checker (GitHub Releases) ─────────────────
+__version__ = "0.0.23"
 
-try:
-    from version_info import __version__
-except ImportError:
-    __version__ = "0.0.0"
-    try:
-        here = Path(sys.executable if getattr(sys, "frozen", False) else __file__).parent
-        remote_ver_file = here / "version.json"
-        __version__ = json.loads(remote_ver_file.read_text()).get("version", __version__)
-    except:
-        pass
+# GitHub “latest release” endpoint:
+GITHUB_API_LATEST = (
+   "https://api.github.com/repos/Gosheto1234/Voice-Assistant/releases/latest"
+)
 
-VERSION_JSON_URL = "https://raw.githubusercontent.com/Gosheto1234/Voice-Assistant/main/version.json"
+# necessary for updater.exe
+CREATE_NO_WINDOW = 0x08000000
+
+
 
 
 # ─── Paths & Logging ────────────────────────────────────────────────────
@@ -78,21 +77,38 @@ def save_json(path, data):
 
 # ─── Update Functions ───────────────────────────────────────────────────
 
-def version_tuple(v): return tuple(map(int, v.split(".")))
+def version_tuple(v): 
+    return tuple(map(int, v.lstrip("v").split(".")))
 
 def query_update():
     try:
-        r = requests.get(VERSION_JSON_URL, timeout=5)
+        r = requests.get(GITHUB_API_LATEST, timeout=5)
+        r.raise_for_status()
         j = r.json()
-        remote  = j.get("version","0.0.0")
-        # <-- use the same key your JSON actually has:
-        exe_url = j.get("url")
+
+        # release tag, e.g. "v0.0.24"
+        tag = j["tag_name"]
+        remote = tag.lstrip("v")
+
+        # find the .exe asset
+        exe_url = None
+        for asset in j.get("assets", []):
+            if asset["name"].lower().endswith(".exe"):
+                exe_url = asset["browser_download_url"]
+                break
+        if not exe_url:
+            logger.error("No .exe asset in latest release")
+            return None
     except Exception as e:
         logger.error("Update check failed: %s", e)
         return None
+
     if version_tuple(remote) <= version_tuple(__version__):
         return None
-    return remote, exe_url, j.get("changelog","")
+
+    changelog = j.get("body", "")
+    return remote, exe_url, changelog
+
 
 def perform_update(exe_url):
     try:
