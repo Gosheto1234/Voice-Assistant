@@ -436,7 +436,7 @@ class VoiceAssistantApp:
         self.stop_btn.pack(side=tk.LEFT)
         tk.Button(frm, text="⚙️Settings",   command=self.open_settings).pack(side=tk.LEFT, padx=5)
         tk.Button(frm, text="Check Update", command=on_update_click).pack(side=tk.LEFT)
-        tk.Button(frm, text="update test", command=on_update_click).pack(side=tk.LEFT)
+       
         
 
         # ── Little Dog GIF ─────────────────────────────────────────
