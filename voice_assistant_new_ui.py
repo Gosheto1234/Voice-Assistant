@@ -13,7 +13,6 @@ import subprocess
 import difflib
 import winreg
 import requests
-import zipfile
 import win32gui
 import win32con
 import ctypes
@@ -43,7 +42,7 @@ except ImportError:
         pass
 
 VERSION_JSON_URL = "https://raw.githubusercontent.com/Gosheto1234/Voice-Assistant/main/version.json"
-UPDATE_ZIP_PATH   = "update.zip"
+
 
 # ─── Paths & Logging ────────────────────────────────────────────────────
 
@@ -85,21 +84,30 @@ def query_update():
     try:
         r = requests.get(VERSION_JSON_URL, timeout=5)
         j = r.json()
-        remote = j.get("version","0.0.0")
+        remote  = j.get("version","0.0.0")
+        exe_url = j.get("exe_url")
     except Exception as e:
         logger.error("Update check failed: %s", e)
         return None
     if version_tuple(remote) <= version_tuple(__version__):
         return None
-    return remote, j.get("zip_url"), j.get("changelog","")
+    return remote, exe_url, j.get("changelog","")
 
-def perform_update(url):
+def perform_update(exe_url):
     try:
-        r = requests.get(url, timeout=10); r.raise_for_status()
-        (BASE_DIR/UPDATE_ZIP_PATH).write_bytes(r.content)
-        with zipfile.ZipFile(UPDATE_ZIP_PATH,"r") as z:
-            z.extractall(BASE_DIR)
-        mb.showinfo("Updated","Please restart app")
+        r = requests.get(exe_url, timeout=15)
+        r.raise_for_status()
+        new_exe = BASE_DIR / "voice_assistant_new.exe"
+        new_exe.write_bytes(r.content)
+        # now hand off to updater.exe: updater.exe <new> <old>
+        old_exe = Path(sys.executable)
+        updater  = BASE_DIR / "updater.exe"
+        subprocess.Popen(
+            [str(updater), str(new_exe), str(old_exe)],
+            creationflags=CREATE_NO_WINDOW,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        )
+        # exit immediately so updater can overwrite this process
         sys.exit(0)
     except Exception as e:
         mb.showerror("Update Failed", str(e))
@@ -673,6 +681,11 @@ class VoiceAssistantApp:
 
 
 if __name__ == "__main__":
+    # 0) If updater.exe just wrote a flag file, notify and delete it
+    flag = BASE_DIR / "just_updated.flag"
+    if flag.exists():
+        flag.unlink()
+        mb.showinfo("Updated", "Voice Assistant was successfully updated.")
     root = tk.Tk()
 
     # Optional auto‐update on launch
