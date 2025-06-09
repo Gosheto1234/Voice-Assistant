@@ -75,70 +75,6 @@ def load_json(path, default=None):
 def save_json(path, data):
     Path(path).write_text(json.dumps(data, indent=2))
 
-# ─── Update Functions ───────────────────────────────────────────────────
-
-def version_tuple(v): 
-    return tuple(map(int, v.lstrip("v").split(".")))
-
-def query_update():
-    try:
-        r = requests.get(GITHUB_API_LATEST, timeout=5)
-        r.raise_for_status()
-        j = r.json()
-
-        # release tag, e.g. "v0.0.24"
-        tag = j["tag_name"]
-        remote = tag.lstrip("v")
-
-        # find the .exe asset
-        exe_url = None
-        for asset in j.get("assets", []):
-            if asset["name"].lower().endswith(".exe"):
-                exe_url = asset["browser_download_url"]
-                break
-        if not exe_url:
-            logger.error("No .exe asset in latest release")
-            return None
-    except Exception as e:
-        logger.error("Update check failed: %s", e)
-        return None
-
-    if version_tuple(remote) <= version_tuple(__version__):
-        return None
-
-    changelog = j.get("body", "")
-    return remote, exe_url, changelog
-
-
-def perform_update(exe_url):
-    try:
-        r = requests.get(exe_url, timeout=15)
-        r.raise_for_status()
-        new_exe = BASE_DIR / "voice_assistant_new.exe"
-        new_exe.write_bytes(r.content)
-        # now hand off to updater.exe: updater.exe <new> <old>
-        old_exe = Path(sys.executable)
-        updater  = BASE_DIR / "updater.exe"
-        subprocess.Popen(
-            [str(updater), str(new_exe), str(old_exe)],
-            creationflags=CREATE_NO_WINDOW,
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-        )
-        # exit immediately so updater can overwrite this process
-        sys.exit(0)
-    except Exception as e:
-        mb.showerror("Update Failed", str(e))
-
-def on_update_click():
-    info = query_update()
-    if not info:
-        mb.showinfo("No Update","You’re on latest")
-        return
-    v,u,log = info
-    if mb.askyesno("Update Available", f"{v}\n{log}\nInstall?"):
-        perform_update(u)
-
-
 
 
 # ─── Bulgarian ↔ English action-word mappings ────────────────────────────────
@@ -451,7 +387,6 @@ class VoiceAssistantApp:
         self.stop_btn = tk.Button(frm, text="Stop", command=self.stop_listening, state=tk.DISABLED)
         self.stop_btn.pack(side=tk.LEFT)
         tk.Button(frm, text="⚙️Settings",   command=self.open_settings).pack(side=tk.LEFT, padx=5)
-        tk.Button(frm, text="Check Update", command=on_update_click).pack(side=tk.LEFT)
        
         
 
@@ -701,19 +636,7 @@ class VoiceAssistantApp:
 
 
 if __name__ == "__main__":
-    # 0) If updater.exe just wrote a flag file, notify and delete it
-    flag = BASE_DIR / "just_updated.flag"
-    if flag.exists():
-        flag.unlink()
-        mb.showinfo("Updated", "Voice Assistant was successfully updated.")
     root = tk.Tk()
-
-    # Optional auto‐update on launch
-    info = query_update()
-    if info:
-        v,u,chg = info
-        if mb.askyesno("Update Available", f"{v}\n{chg}\nInstall now?"):
-            perform_update(u)
     
     VoiceAssistantApp(root)
     root.mainloop()
