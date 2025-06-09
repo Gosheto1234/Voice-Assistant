@@ -45,15 +45,7 @@ jobs:
           pip install -r requirements.txt pyinstaller
 
       - name: Build main EXE
-        run: |
-          pyinstaller \
-            --clean \
-            --onefile \
-            --windowed \
-            --icon icon/icon.ico \
-            --name VoiceAssistant.exe \
-            --add-data "annoying_dog.gif;." \
-            voice_assistant_new_ui.py
+        run: pyinstaller --clean --onefile --windowed --icon icon/icon.ico --name VoiceAssistant.exe --add-data "annoying_dog.gif;." voice_assistant_new_ui.py
 
       - name: Create GitHub Release
         id: create_release
