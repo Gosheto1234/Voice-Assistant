@@ -435,6 +435,8 @@ class VoiceAssistantApp:
         self.stop_btn.pack(side=tk.LEFT)
         tk.Button(frm, text="⚙️Settings",   command=self.open_settings).pack(side=tk.LEFT, padx=5)
         tk.Button(frm, text="Check Update", command=on_update_click).pack(side=tk.LEFT)
+        tk.Button(frm, text="update test", command=on_update_click).pack(side=tk.LEFT)
+        
 
         # ── Little Dog GIF ─────────────────────────────────────────
         gif = BASE_DIR / "annoying_dog.gif"
@@ -678,7 +680,7 @@ class VoiceAssistantApp:
             win.destroy()
 
         tk.Button(win, text="Apply", command=apply_and_close).pack(pady=15)
-        tk.Button(win, text="TEST UPDATER", command=apply_and_close).pack(pady=15)
+        
 
 
 if __name__ == "__main__":
