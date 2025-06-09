@@ -85,6 +85,7 @@ def query_update():
         r = requests.get(VERSION_JSON_URL, timeout=5)
         j = r.json()
         remote  = j.get("version","0.0.0")
+        # <-- use the same key your JSON actually has:
         exe_url = j.get("url")
     except Exception as e:
         logger.error("Update check failed: %s", e)
