@@ -1,0 +1,40 @@
+name: 🛠️ Sync version.json from Release
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  bump-version-json:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+        with:
+          persist-credentials: true
+
+      - name: Grab the new tag
+        id: get_tag
+        run: |
+          # e.g. "v0.0.135" → strip leading "v"
+          echo "::set-output name=VER::${GITHUB_REF#refs/tags/v}"
+
+      - name: Update version.json
+        run: |
+          jq \
+            --arg ver "${{ steps.get_tag.outputs.VER }}" \
+            --arg url "https://github.com/Gosheto1234/Voice-Assistant/releases/download/v${{ steps.get_tag.outputs.VER }}/voice_assistant.zip" \
+            --arg chg "See Release notes for v${{ steps.get_tag.outputs.VER }}" \
+            '.version     = $ver
+             | .url         = $url
+             | .changelog   = $chg' \
+            version.json > version.json.tmp
+          mv version.json.tmp version.json
+
+      - name: Commit & Push version.json
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add version.json
+          git commit -m "chore: bump version.json → ${{ steps.get_tag.outputs.VER }}"
+          git push
