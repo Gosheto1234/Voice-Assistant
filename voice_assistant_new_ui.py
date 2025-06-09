@@ -505,12 +505,12 @@ class VoiceAssistantApp:
                 curr = self.volume.GetMasterVolumeLevelScalar()
                 new  = max(0.0, curr - 0.1)
                 self.volume.SetMasterVolumeLevelScalar(new, None)
-                print(f"[Volume] down → {new:.1%}"); return
+                print(f"[Volume] down → {new:.10%}"); return
             if lower in ("повече звук", "volume up", "громкост нагоре"):
                 curr = self.volume.GetMasterVolumeLevelScalar()
                 new  = min(1.0, curr + 0.1)
                 self.volume.SetMasterVolumeLevelScalar(new, None)
-                print(f"[Volume] up → {new:.1%}"); return
+                print(f"[Volume] up → {new:.10%}"); return
 
             # 3) media controls via keyboard
             if lower in ("пауза", "pause"):
