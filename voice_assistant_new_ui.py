@@ -678,6 +678,7 @@ class VoiceAssistantApp:
             win.destroy()
 
         tk.Button(win, text="Apply", command=apply_and_close).pack(pady=15)
+        tk.Button(win, text="TEST UPDATER", command=apply_and_close).pack(pady=15)
 
 
 if __name__ == "__main__":
